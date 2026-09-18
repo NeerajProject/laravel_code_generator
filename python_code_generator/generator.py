@@ -7,37 +7,40 @@ from datetime import datetime
 
 DSL = DSL = """
 project:/home/nj/workspace/laravel_code_generator/laravel_code_generator/laraval_caste/my_laravel_app
-module:OrderLine
+module:ResPartner
 
-order.line
-url:/sales/order-lines
+res.partner
+url:/customers
 
-order_id:m2o(sale.order)
-product_name:char*
-quantity:float
-price_unit:float
-subtotal:float
+name:char*
+email:char
+phone:char
+address:text
+is_active:bool
+
+smart:
+    sale_order
 
 list:
-    order_id
-    product_name
-    quantity
-    price_unit
-    subtotal
+    name
+    email
+    phone
+    is_active
 
 filter:
-    order_id
-    product_name
+    name
+    email
+    phone
 
 form:
-    order_id
-    product_name
-    quantity
-    price_unit
-    subtotal
+    name
+    email
+    phone
+    address
+    is_active
 
 menu:
-    Sales/Order Lines
+    Sales/Customers
 """
 
 # ============================================================
@@ -458,32 +461,68 @@ Route::resource('{url}', {model}Controller::class)->names('{route_name}');
 def generate_list(data):
     model = class_name(data["model"])
     url = data["url"].strip("/")
-    headers = "".join(f"\n                        <th>{f}</th>" for f in data["list"])
-    cells = "".join(f"\n                        <td>{{record.{f}}}</td>" for f in data["list"])
-    filters = "".join(f'\n            <input placeholder="{f}" onChange={{e => setFilters({{ ...filters, {f}: e.target.value }})}} />' for f in data["filter"])
+    headers = "".join(
+        f'\n                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">{field}</th>'
+        for field in data["list"]
+    )
+    cells = "".join(
+        f'\n                            <td className="px-4 py-3 text-sm text-gray-700">{{record.{field} ?? "-"}}</td>'
+        for field in data["list"]
+    )
+    filters = "".join(
+        f"""
+                    <label className="block">
+                        <span className="mb-1 block text-sm font-medium text-gray-700">{field}</span>
+                        <input
+                            className="w-full rounded-md border-gray-300 shadow-sm"
+                            value={{filters.{field} ?? ""}}
+                            onChange={{e => setFilters({{ ...filters, {field}: e.target.value }})}}
+                        />
+                    </label>"""
+        for field in data["filter"]
+    )
 
     return f"""import {{ Link, router }} from "@inertiajs/react";
 import {{ useState }} from "react";
 
-export default function Index({{ records }}) {{
+export default function Index({{ records = [] }}) {{
     const [filters, setFilters] = useState({{}});
     const applyFilters = () => router.get("/{url}", {{ filters }}, {{ preserveState: true }});
 
     return (
-        <div>
-            <h1>{model}</h1>
-            <div>{filters}
-                <button onClick={{applyFilters}}>Filter</button>
+        <div className="min-h-screen bg-gray-50 p-6">
+            <div className="mx-auto max-w-7xl">
+                <div className="mb-6 flex items-center justify-between">
+                    <div>
+                        <p className="text-sm text-gray-500">Sales</p>
+                        <h1 className="text-2xl font-semibold text-gray-900">{model}</h1>
+                    </div>
+                    <Link href="/{url}/create" className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-700">Create</Link>
+                </div>
+                <div className="mb-6 rounded-lg bg-white p-4 shadow">
+                    <div className="grid gap-4 md:grid-cols-3">{filters}</div>
+                    <div className="mt-4 flex gap-2">
+                        <button onClick={{applyFilters}} className="rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white">Apply Filters</button>
+                        <button onClick={{() => setFilters({{}})}} className="rounded-md border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700">Clear</button>
+                    </div>
+                </div>
+                <div className="overflow-hidden rounded-lg bg-white shadow">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50"><tr>{headers}
+                            <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Actions</th>
+                        </tr></thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {{records.map(record => (
+                                <tr key={{record.id}} className="hover:bg-gray-50">{cells}
+                                    <td className="px-4 py-3 text-right">
+                                        <Link href={{`/{url}/${{record.id}}`}} className="font-medium text-indigo-600 hover:text-indigo-900">View</Link>
+                                    </td>
+                                </tr>
+                            ))}}
+                        </tbody>
+                    </table>
+                </div>
             </div>
-            <Link href="/{url}/create">Create</Link>
-            <table>
-                <thead><tr>{headers}\n                    </tr></thead>
-                <tbody>
-                    {{records.map(record => (
-                        <tr key={{record.id}}>{cells}\n                        </tr>
-                    ))}}
-                </tbody>
-            </table>
         </div>
     );
 }}
@@ -494,32 +533,50 @@ def generate_form(data):
     url = data["url"].strip("/")
     inputs = ""
     for field in data["fields"]:
-        if field["type"].startswith("o2m(") or field["compute"]: continue
+        if field["type"].startswith("o2m(") or field["compute"]:
+            continue
         input_type = "text"
-        if field["type"] in ("int", "float"): input_type = "number"
-        elif field["type"] == "date": input_type = "date"
-        elif field["type"] == "datetime": input_type = "datetime-local"
-        elif field["type"] == "bool": input_type = "checkbox"
-
+        if field["type"] in ("int", "float"):
+            input_type = "number"
+        elif field["type"] == "date":
+            input_type = "date"
+        elif field["type"] == "datetime":
+            input_type = "datetime-local"
+        elif field["type"] == "bool":
+            input_type = "checkbox"
+        value_prop = "checked" if input_type == "checkbox" else "value"
+        value = f'data.{field["name"]} ?? ' + ("false" if input_type == "checkbox" else '""')
+        event_value = "e.target.checked" if input_type == "checkbox" else "e.target.value"
         inputs += f"""
-            <div>
-                <label>{field["name"]}</label>
-                <input type="{input_type}" value={{data.{field["name"]} ?? ""}} onChange={{e => setData("{field["name"]}", e.target.value)}} />
+            <div className="rounded-md border border-gray-200 bg-white p-4">
+                <label className="mb-1 block text-sm font-medium text-gray-700">{field["name"]}</label>
+                <input type="{input_type}" {value_prop}={{{value}}} onChange={{e => setData("{field["name"]}", {event_value})}} className="w-full rounded-md border-gray-300 shadow-sm" />
             </div>"""
 
-    return f"""import {{ useForm }} from "@inertiajs/react";
+    return f"""import {{ Link, useForm }} from "@inertiajs/react";
 
 export default function Form({{ record }}) {{
-    const {{ data, setData, post, put, processing }} = useForm(record ?? {{}});
+    const {{ data, setData, post, put, processing, errors }} = useForm(record ?? {{}});
     const submit = (e) => {{
         e.preventDefault();
         record ? put(`/{url}/${{record.id}}`) : post("/{url}");
     }};
     return (
-        <form onSubmit={{submit}}>
-            <h1>{model}</h1>{inputs}
-            <button type="submit" disabled={{processing}}>Save</button>
-        </form>
+        <div className="min-h-screen bg-gray-50 p-6">
+            <div className="mx-auto max-w-5xl">
+                <div className="mb-6 flex items-center justify-between">
+                    <div><p className="text-sm text-gray-500">Sales / Orders</p><h1 className="text-2xl font-semibold text-gray-900">{{record ? "Edit" : "Create"}} {model}</h1></div>
+                    <Link href="/{url}" className="text-sm font-medium text-indigo-600 hover:text-indigo-900">Back to list</Link>
+                </div>
+                <form onSubmit={{submit}} className="space-y-6">
+                    <div className="grid gap-4 md:grid-cols-2">{inputs}</div>
+                    <div className="flex justify-end gap-3">
+                        <Link href="/{url}" className="rounded-md border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700">Cancel</Link>
+                        <button type="submit" disabled={{processing}} className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow disabled:opacity-50">{{processing ? "Saving..." : "Save"}}</button>
+                    </div>
+                </form>
+            </div>
+        </div>
     );
 }}
 """
@@ -527,16 +584,34 @@ export default function Form({{ record }}) {{
 def generate_show(data):
     model = class_name(data["model"])
     url = data["url"].strip("/")
-    header_buttons = "".join(f'\n            <button onClick={{() => router.post("/{url}/${{record.id}}/{a.strip()}")}}>{a.strip().title()}</button>' for a in data["header"])
-    smart_blocks = "".join(f'\n            <div>{s.strip().title()}: {{record.{s.strip()}_count}}</div>' for s in data["smart"])
+    header_buttons = "".join(
+        f'\n                        <button type="button" onClick={{() => router.post(`/{url}/${{record.id}}/{action.strip()}`)}} className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">{action.strip().title()}</button>'
+        for action in data["header"]
+    )
+    smart_blocks = "".join(
+        f'\n                    <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm"><p className="text-xs uppercase tracking-wide text-gray-500">{smart.strip()}</p><p className="text-xl font-semibold text-gray-900">{{record.{smart.strip()}_count ?? 0}}</p></div>'
+        for smart in data["smart"]
+    )
+    details = "".join(
+        f'\n                        <div className="border-b border-gray-100 py-3"><dt className="text-sm font-medium text-gray-500">{field}</dt><dd className="mt-1 text-sm text-gray-900">{{record.{field} ?? "-"}}</dd></div>'
+        for field in data["form"]
+        if not any(item["name"] == field and item["type"].startswith("o2m(") for item in data["fields"])
+    )
+    columns = max(1, min(4, len(data["smart"])))
 
-    return f"""import {{ router }} from "@inertiajs/react";
+    return f"""import {{ Link, router }} from "@inertiajs/react";
 
 export default function Show({{ record }}) {{
     return (
-        <div>
-            <h1>{model}</h1>{header_buttons}{smart_blocks}
-            <pre>{{JSON.stringify(record, null, 2)}}</pre>
+        <div className="min-h-screen bg-gray-50 p-6">
+            <div className="mx-auto max-w-5xl">
+                <div className="mb-6 flex items-center justify-between">
+                    <div><p className="text-sm text-gray-500">Sales / Orders</p><h1 className="text-2xl font-semibold text-gray-900">{model}</h1></div>
+                    <div className="flex gap-2"><Link href={{`/{url}/${{record.id}}/edit`}} className="rounded-md border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700">Edit</Link>{header_buttons}</div>
+                </div>
+                <div className="mb-6 grid gap-4 md:grid-cols-{columns}">{smart_blocks}</div>
+                <div className="rounded-lg bg-white p-6 shadow"><dl className="grid gap-x-8 md:grid-cols-2">{details}</dl></div>
+            </div>
         </div>
     );
 }}
