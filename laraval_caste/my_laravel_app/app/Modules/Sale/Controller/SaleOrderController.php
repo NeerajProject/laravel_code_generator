@@ -68,7 +68,7 @@ class SaleOrderController extends Controller
                 'amount_total' => $record->order_line_ids()->sum('subtotal'),
             ]);
 
-            return redirect()->route('sale.order.index')->with('success', 'Created successfully.');
+          
         });
     }
 

@@ -52,7 +52,7 @@ class ResPartnerController extends Controller
             $data = $request->except(['_token']);
             $record = $this->service->create($data);
 
-            return redirect()->route('res.partner.index')->with('success', 'Created successfully.');
+
         });
     }
 
