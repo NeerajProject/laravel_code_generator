@@ -7,6 +7,7 @@ use App\Modules\ResPartner\Repository\ResPartnerRepositoryInterface;
 use App\Modules\ResPartner\Service\ResPartnerService;
 use App\Modules\ResPartner\Request\ResPartnerRequest;
 
+
 class ResPartnerController extends Controller
 {
     public function __construct(
@@ -19,7 +20,10 @@ class ResPartnerController extends Controller
             'records' => $this->repository->all($request->get('filters', [])),
         ]);
     }
-    public function create() { return Inertia::render('Modules/ResPartner/Form'); }
+    public function create() {
+        $lookups = [];
+        return Inertia::render('Modules/ResPartner/Form', ['lookups' => $lookups ?? []]);
+    }
     public function store(ResPartnerRequest $request) {
         $this->repository->create($request->validated());
         return redirect()->route('res.partner.index');
@@ -28,7 +32,11 @@ class ResPartnerController extends Controller
         return Inertia::render('Modules/ResPartner/Show', ['record' => $this->repository->find($id)]);
     }
     public function edit($id) {
-        return Inertia::render('Modules/ResPartner/Form', ['record' => $this->repository->find($id)]);
+        $lookups = [];
+        return Inertia::render('Modules/ResPartner/Form', [
+            'record' => $this->repository->find($id),
+            'lookups' => $lookups ?? [],
+        ]);
     }
     public function update(ResPartnerRequest $request, $id) {$this->repository->update($id,$request->validated());
         return redirect()->route('res.partner.index');

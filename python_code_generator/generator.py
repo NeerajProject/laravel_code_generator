@@ -2,45 +2,43 @@ from pathlib import Path
 from datetime import datetime
 
 # ============================================================
-# DSL  (same grammar as the Odoo generator)
+# DSL (Grammar for Odoo-like modular Laravel generator)
 # ============================================================
 
-DSL = DSL = """
+DSL = """
 project:/home/nj/workspace/laravel_code_generator/laravel_code_generator/laraval_caste/my_laravel_app
-module:ResPartner
+module:Product
 
-res.partner
-url:/customers
+product.product
+url:/products
 
 name:char*
-email:char
-phone:char
-address:text
+code:char
+list_price:float
+standard_price:float
+description:text
 is_active:bool
-
-smart:
-    sale_order
 
 list:
     name
-    email
-    phone
+    code
+    list_price
     is_active
 
 filter:
     name
-    email
-    phone
+    code
 
 form:
     name
-    email
-    phone
-    address
+    code
+    list_price
+    standard_price
+    description
     is_active
 
 menu:
-    Sales/Customers
+    Sales/Products
 """
 
 # ============================================================
@@ -56,7 +54,7 @@ def table_name(model):
     return model.replace(".", "_") + "s"
 
 def namespace(model, module_name=None):
-    """sale.order -> App\\Modules\\SaleOrder (or the DSL's module: override)"""
+    """sale.order -> App\\Modules\\Product"""
     return f"App\\Modules\\{module_name or class_name(model)}"
 
 def relation_model(field_type):
@@ -154,7 +152,7 @@ class DSLParser:
         })
 
 # ============================================================
-# GENERATORS (Model, Migration, Repo, Service, Controller, React views)
+# TEMPLATE GENERATORS
 # ============================================================
 
 def generate_model(data, module_name):
@@ -194,7 +192,7 @@ def generate_model(data, module_name):
             relations += f"""
     public function {field["name"]}()
     {{
-        return $this->belongsTo(\\App\\Modules\\{relation_class}\\Model\\{relation_class}::class, '{field["name"]}');
+        return $this->belongsTo(\\App\\Modules\\{module_name}\\Model\\{relation_class}::class, '{field["name"]}');
     }}
 """
         elif field_type.startswith("o2m("):
@@ -203,7 +201,7 @@ def generate_model(data, module_name):
             relations += f"""
     public function {field["name"]}()
     {{
-        return $this->hasMany(\\App\\Modules\\{relation_class}\\Model\\{relation_class}::class, '{foreign_key}');
+        return $this->hasMany(\\App\\Modules\\{module_name}\\Model\\{relation_class}::class, '{foreign_key}');
     }}
 """
 
@@ -225,16 +223,22 @@ def generate_model(data, module_name):
 """
 
     return f"""<?php
+
 namespace {ns}\\Model;
+
 use Illuminate\\Database\\Eloquent\\Model;
 
 class {model} extends Model
 {{
     protected $table = '{table}';
-    protected $fillable = [\n        {fillable}\n    ];{casts_block}
-    protected $appends = [\n        {appends}\n    ];
-{relations}{accessors}
-}}
+
+    protected $fillable = [
+        {fillable}
+    ];{casts_block}
+    protected $appends = [
+        {appends}
+    ];
+{relations}{accessors}}}
 """
 
 def migration_column(field):
@@ -243,10 +247,7 @@ def migration_column(field):
     nullable = "" if field["required"] else "->nullable()"
 
     if field_type.startswith("m2o("):
-        return (
-            f"            $table->foreignId('{name}')"
-            f"{nullable};"
-        )
+        return f"            $table->foreignId('{name}'){nullable};"
     if field_type == "char": return f"            $table->string('{name}'){nullable};"
     if field_type == "text": return f"            $table->text('{name}'){nullable};"
     if field_type == "int": return f"            $table->integer('{name}'){nullable};"
@@ -262,6 +263,7 @@ def generate_migration(data):
     columns_text = "\n".join(columns)
 
     return f"""<?php
+
 use Illuminate\\Database\\Migrations\\Migration;
 use Illuminate\\Database\\Schema\\Blueprint;
 use Illuminate\\Support\\Facades\\Schema;
@@ -273,6 +275,7 @@ return new class extends Migration {{
             $table->timestamps();
         }});
     }}
+
     public function down(): void {{
         Schema::dropIfExists('{table}');
     }}
@@ -286,37 +289,48 @@ def generate_repository(data, module_name):
     domain_hint = ", ".join(f"'{f}'" for f in filter_fields)
 
     return f"""<?php
+
 namespace {ns}\\Repository;
+
 use {ns}\\Model\\{model};
 
 class {model}Repository implements {model}RepositoryInterface
 {{
     public function __construct(protected {model} $model) {{}}
 
-    /** Filterable fields for domain-style search: [{domain_hint}] */
-    public function all(array $domain = [], array$with = []) {{
-        $query = $this->model->newQuery()->with($with);
-        foreach ($domain as $field => $value) {{
-            if (in_array($field, [{domain_hint}], true) && $value !== null && $value !== '') {{
-                $query->where($field, $value);
+    public function all(array $domain = [], array $with = []) {{$query = $this->model->newQuery()->with($with);
+        foreach ($domain as $field =>$value) {{
+            if (in_array($field, [{domain_hint}], true) &&$value !== null && $value !== '') {{$query->where($field,$value);
             }}
         }}
         return $query->latest()->get();
     }}
-    public function find($id, array $with = []) {{ return $this->model->with($with)->findOrFail($id); }}
-    public function create(array $data) {{ return $this->model->create($data); }}
+
+    public function find($id, array$with = []) {{
+        return $this->model->with($with)->findOrFail($id);
+    }}
+
+    public function create(array $data) {{
+        return $this->model->create($data);
+    }}
+
     public function update($id, array $data) {{$record = $this->find($id);
         $record->update($data);
         return $record;
     }}
-    public function delete($id) {{ return $this->find($id)->delete(); }}
+
+    public function delete($id) {{
+        return $this->find($id)->delete();
+    }}
 }}
 """
 
 def generate_repository_interface(data, module_name):
     model = class_name(data["model"])
     ns = namespace(data["model"], module_name)
+
     return f"""<?php
+
 namespace {ns}\\Repository;
 
 interface {model}RepositoryInterface
@@ -351,7 +365,9 @@ def generate_service(data, module_name):
 """
 
     return f"""<?php
+
 namespace {ns}\\Service;
+
 use {ns}\\Repository\\{model}RepositoryInterface;
 
 class {model}Service
@@ -366,6 +382,7 @@ def generate_controller(data, module_name):
     ns = namespace(data["model"], module_name)
     route_name = data["model"]
     header_actions = ""
+
     for action in data["header"]:
         method = action.strip().replace("-", "_").replace(" ", "_")
         header_actions += f"""
@@ -374,8 +391,11 @@ def generate_controller(data, module_name):
         return redirect()->route('{route_name}.show', $id);
     }}
 """
+
     return f"""<?php
+
 namespace {ns}\\Controller;
+
 use App\\Http\\Controllers\\Controller;
 use Illuminate\\Http\\Request;
 use Inertia\\Inertia;
@@ -391,48 +411,63 @@ class {model}Controller extends Controller
     ) {{}}
 
     public function index(Request $request) {{
-        return Inertia::render('Modules/{model}/Index', [
+        return Inertia::render('Modules/{module_name}/{model}/Index', [
             'records' => $this->repository->all($request->get('filters', [])),
         ]);
     }}
-    public function create() {{ return Inertia::render('Modules/{model}/Form'); }}
+
+    public function create() {{
+        return Inertia::render('Modules/{module_name}/{model}/Form');
+    }}
+
     public function store({model}Request $request) {{
         $this->repository->create($request->validated());
         return redirect()->route('{route_name}.index');
     }}
+
     public function show($id) {{
-        return Inertia::render('Modules/{model}/Show', ['record' => $this->repository->find($id)]);
+        return Inertia::render('Modules/{module_name}/{model}/Show', [
+            'record' => $this->repository->find($id)
+        ]);
     }}
+
     public function edit($id) {{
-        return Inertia::render('Modules/{model}/Form', ['record' => $this->repository->find($id)]);
+        return Inertia::render('Modules/{module_name}/{model}/Form', [
+            'record' => $this->repository->find($id)
+        ]);
     }}
+
     public function update({model}Request $request, $id) {{$this->repository->update($id,$request->validated());
         return redirect()->route('{route_name}.index');
     }}
+
     public function destroy($id) {{
         $this->repository->delete($id);
         return redirect()->route('{route_name}.index');
     }}
-{header_actions}
-}}
+{header_actions}}}
 """
 
 def generate_request(data, module_name):
     model = class_name(data["model"])
     ns = namespace(data["model"], module_name)
     rules = []
+
     for field in data["fields"]:
         if field["type"].startswith("o2m(") or field["compute"]: continue
         rule = "required" if field["required"] else "nullable"
         rules.append(f"            '{field['name']}' => '{rule}',")
 
     return f"""<?php
+
 namespace {ns}\\Request;
+
 use Illuminate\\Foundation\\Http\\FormRequest;
 
 class {model}Request extends FormRequest
 {{
     public function authorize(): bool {{ return true; }}
+
     public function rules(): array {{
         return [
 {chr(10).join(rules)}
@@ -447,11 +482,13 @@ def generate_routes(data, module_name):
     url = data["url"].strip("/")
     route_name = data["model"]
     extra_routes = ""
+
     for action in data["header"]:
         method = action.strip().replace("-", "_").replace(" ", "_")
         extra_routes += f"Route::post('{url}/{{id}}/{action.strip()}', [{model}Controller::class, '{method}'])->name('{route_name}.{method}');\n"
 
     return f"""<?php
+
 use Illuminate\\Support\\Facades\\Route;
 use {ns}\\Controller\\{model}Controller;
 
@@ -465,10 +502,16 @@ def generate_list(data):
         f'\n                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">{field}</th>'
         for field in data["list"]
     )
-    cells = "".join(
-        f'\n                            <td className="px-4 py-3 text-sm text-gray-700">{{record.{field} ?? "-"}}</td>'
-        for field in data["list"]
-    )
+    cells = ""
+    for field_name in data["list"]:
+        field = next((item for item in data["fields"] if item["name"] == field_name), None)
+        value = (
+            f"record.{field_name}?.name ?? record.{field_name}"
+            if field and field["type"].startswith("m2o(")
+            else f"record.{field_name}"
+        )
+        cells += f'\n                            <td className="px-4 py-3 text-sm text-gray-700">{{{value} ?? "-"}}</td>'
+
     filters = "".join(
         f"""
                     <label className="block">
@@ -494,7 +537,6 @@ export default function Index({{ records = [] }}) {{
             <div className="mx-auto max-w-7xl">
                 <div className="mb-6 flex items-center justify-between">
                     <div>
-                        <p className="text-sm text-gray-500">Sales</p>
                         <h1 className="text-2xl font-semibold text-gray-900">{model}</h1>
                     </div>
                     <Link href="/{url}/create" className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-700">Create</Link>
@@ -532,40 +574,60 @@ def generate_form(data):
     model = class_name(data["model"])
     url = data["url"].strip("/")
     inputs = ""
+
     for field in data["fields"]:
-        if field["type"].startswith("o2m(") or field["compute"]:
-            continue
-        input_type = "text"
-        if field["type"] in ("int", "float"):
-            input_type = "number"
-        elif field["type"] == "date":
-            input_type = "date"
-        elif field["type"] == "datetime":
-            input_type = "datetime-local"
-        elif field["type"] == "bool":
-            input_type = "checkbox"
-        value_prop = "checked" if input_type == "checkbox" else "value"
-        value = f'data.{field["name"]} ?? ' + ("false" if input_type == "checkbox" else '""')
-        event_value = "e.target.checked" if input_type == "checkbox" else "e.target.value"
-        inputs += f"""
+        if field["compute"]: continue
+
+        name = field["name"]
+        field_type = field["type"]
+
+        if field_type.startswith("m2o("):
+            relation = relation_model(field_type)
+            inputs += f"""
             <div className="rounded-md border border-gray-200 bg-white p-4">
-                <label className="mb-1 block text-sm font-medium text-gray-700">{field["name"]}</label>
-                <input type="{input_type}" {value_prop}={{{value}}} onChange={{e => setData("{field["name"]}", {event_value})}} className="w-full rounded-md border-gray-300 shadow-sm" />
+                <label className="mb-1 block text-sm font-medium text-gray-700">{name}</label>
+                <select value={{data.{name} ?? ""}} onChange={{e => setData("{name}", e.target.value)}} className="w-full rounded-md border-gray-300 shadow-sm">
+                    <option value="">Select {relation}</option>
+                    {{(lookups.{name} ?? []).map(option => <option key={{option.id}} value={{option.id}}>{{option.name ?? option.label ?? option.id}}</option>)}}
+                </select>
+            </div>"""
+        else:
+            input_type = {
+                "int": "number",
+                "float": "number",
+                "date": "date",
+                "datetime": "datetime-local",
+                "bool": "checkbox",
+            }.get(field_type, "text")
+
+            if field_type == "text":
+                control = f'<textarea value={{data.{name} ?? ""}} onChange={{e => setData("{name}", e.target.value)}} className="w-full rounded-md border-gray-300 shadow-sm" rows="4" />'
+            else:
+                value_prop = "checked" if input_type == "checkbox" else "value"
+                value = f'data.{name} ?? ' + ("false" if input_type == "checkbox" else '""')
+                event_value = "e.target.checked" if input_type == "checkbox" else "e.target.value"
+                control = f'<input type="{input_type}" {value_prop}={{{value}}} onChange={{e => setData("{name}", {event_value})}} className="w-full rounded-md border-gray-300 shadow-sm" />'
+
+            inputs += f"""
+            <div className="rounded-md border border-gray-200 bg-white p-4">
+                <label className="mb-1 block text-sm font-medium text-gray-700">{name}</label>
+                {control}
             </div>"""
 
     return f"""import {{ Link, useForm }} from "@inertiajs/react";
 
-export default function Form({{ record }}) {{
-    const {{ data, setData, post, put, processing, errors }} = useForm(record ?? {{}});
+export default function Form({{ record, lookups = {{}} }}) {{
+    const {{ data, setData, post, put, processing }} = useForm(record ?? {{}});
     const submit = (e) => {{
         e.preventDefault();
         record ? put(`/{url}/${{record.id}}`) : post("/{url}");
     }};
+
     return (
         <div className="min-h-screen bg-gray-50 p-6">
             <div className="mx-auto max-w-5xl">
                 <div className="mb-6 flex items-center justify-between">
-                    <div><p className="text-sm text-gray-500">Sales / Orders</p><h1 className="text-2xl font-semibold text-gray-900">{{record ? "Edit" : "Create"}} {model}</h1></div>
+                    <h1 className="text-2xl font-semibold text-gray-900">{{record ? "Edit" : "Create"}} {model}</h1>
                     <Link href="/{url}" className="text-sm font-medium text-indigo-600 hover:text-indigo-900">Back to list</Link>
                 </div>
                 <form onSubmit={{submit}} className="space-y-6">
@@ -606,8 +668,10 @@ export default function Show({{ record }}) {{
         <div className="min-h-screen bg-gray-50 p-6">
             <div className="mx-auto max-w-5xl">
                 <div className="mb-6 flex items-center justify-between">
-                    <div><p className="text-sm text-gray-500">Sales / Orders</p><h1 className="text-2xl font-semibold text-gray-900">{model}</h1></div>
-                    <div className="flex gap-2"><Link href={{`/{url}/${{record.id}}/edit`}} className="rounded-md border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700">Edit</Link>{header_buttons}</div>
+                    <h1 className="text-2xl font-semibold text-gray-900">{model}</h1>
+                    <div className="flex gap-2">
+                        <Link href={{`/{url}/${{record.id}}/edit`}} className="rounded-md border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700">Edit</Link>{header_buttons}
+                    </div>
                 </div>
                 <div className="mb-6 grid gap-4 md:grid-cols-{columns}">{smart_blocks}</div>
                 <div className="rounded-lg bg-white p-6 shadow"><dl className="grid gap-x-8 md:grid-cols-2">{details}</dl></div>
@@ -626,13 +690,9 @@ class Generator:
         self.data = data
         self.project = Path(data["project"]).expanduser().resolve()
         self.module = data["module_name"] or class_name(data["model"])
-        self.module_dir = self.project / "app" / "Modules" / self.module
 
     def register_module_routes(self):
         route_path = self.project / "routes" / "web.php"
-        invalid_route_line = (
-            f"require __DIR__.'/app/Modules/{self.module}/Routes/web.php';"
-        )
         route_line = f"require __DIR__.'/../app/Modules/{self.module}/Routes/web.php';"
 
         if not route_path.exists():
@@ -640,98 +700,76 @@ class Generator:
             route_path.write_text("<?php\n", encoding="utf-8")
 
         content = route_path.read_text(encoding="utf-8")
-        content = content.replace(invalid_route_line, "").replace("\n\n\n", "\n\n")
         if route_line not in content:
             route_path.write_text(content + "\n" + route_line + "\n", encoding="utf-8")
-        else:
-            route_path.write_text(content, encoding="utf-8")
-        print(f"✓ Registered routes: {self.module}")
+        print(f"✓ Registered routes in routes/web.php: {self.module}")
 
     def register_repository_binding(self):
         provider_path = self.project / "app" / "Providers" / "AppServiceProvider.php"
+        model = class_name(self.data["model"])
+
         binding = (
             f"        $this->app->bind("
-            f"\\App\\Modules\\{self.module}\\Repository\\"
-            f"{self.module}RepositoryInterface::class, "
-            f"\\App\\Modules\\{self.module}\\Repository\\"
-            f"{self.module}Repository::class);"
+            f"\\App\\Modules\\{self.module}\\Repository\\{model}RepositoryInterface::class, "
+            f"\\App\\Modules\\{self.module}\\Repository\\{model}Repository::class);"
         )
+
+        if not provider_path.exists():
+            return
 
         content = provider_path.read_text(encoding="utf-8")
         if binding in content:
             return
 
         register_marker = "    public function register(): void\n    {\n"
-        if register_marker not in content:
-            raise ValueError(
-                f"Cannot register repository binding in {provider_path}: "
-                "register method not found."
-            )
-
-        content = content.replace(
-            register_marker,
-            register_marker + binding + "\n",
-            1,
-        )
-        provider_path.write_text(content, encoding="utf-8")
-        print(f"✓ Registered repository binding: {self.module}")
+        if register_marker in content:
+            content = content.replace(register_marker, register_marker + binding + "\n", 1)
+            provider_path.write_text(content, encoding="utf-8")
+            print(f"✓ Registered Repository interface binding in AppServiceProvider: {model}")
 
     def generate(self):
         if not self.project.exists():
-            raise FileNotFoundError(f"Project not found: {self.project}")
+            raise FileNotFoundError(f"Project path not found: {self.project}")
 
         if not (self.project / "artisan").exists():
-            raise ValueError("Invalid Laravel project. artisan not found.")
+            raise ValueError("Invalid Laravel project folder. artisan file not found.")
 
         timestamp = datetime.now().strftime("%Y_%m_%d_%H%M%S")
         table = table_name(self.data["model"])
+        model = class_name(self.data["model"])
         migration_dir = self.project / "database" / "migrations"
-        existing_migrations = sorted(
-            migration_dir.glob(f"*_create_{table}_table.php")
-        )
-        migration_path = (
-            existing_migrations[-1]
-            if existing_migrations
-            else migration_dir / f"{timestamp}_create_{table}_table.php"
-        )
+        
+        existing_migrations = sorted(migration_dir.glob(f"*_create_{table}_table.php"))
+        migration_path = existing_migrations[-1] if existing_migrations else migration_dir / f"{timestamp}_create_{table}_table.php"
         migration_relative_path = migration_path.relative_to(self.project)
 
-        # Mapping all files needed for the Laravel project structure.
         files = {
-            f"app/Modules/{self.module}/Model/{self.module}.php":
-                generate_model(self.data, self.module),
-            f"app/Modules/{self.module}/Repository/{self.module}Repository.php":
-                generate_repository(self.data, self.module),
-            f"app/Modules/{self.module}/Repository/{self.module}RepositoryInterface.php":
-                generate_repository_interface(self.data, self.module),
-            f"app/Modules/{self.module}/Service/{self.module}Service.php":
-                generate_service(self.data, self.module),
-            f"app/Modules/{self.module}/Controller/{self.module}Controller.php":
-                generate_controller(self.data, self.module),
-            f"app/Modules/{self.module}/Request/{self.module}Request.php":
-                generate_request(self.data, self.module),
-            str(migration_relative_path):
-                generate_migration(self.data),
-            f"app/Modules/{self.module}/Routes/web.php":
-                generate_routes(self.data, self.module),
-            f"resources/js/Pages/Modules/{self.module}/Index.jsx":
-                generate_list(self.data),
-            f"resources/js/Pages/Modules/{self.module}/Form.jsx":
-                generate_form(self.data),
-            f"resources/js/Pages/Modules/{self.module}/Show.jsx":
-                generate_show(self.data),
+            f"app/Modules/{self.module}/Model/{model}.php": generate_model(self.data, self.module),
+            f"app/Modules/{self.module}/Repository/{model}Repository.php": generate_repository(self.data, self.module),
+            f"app/Modules/{self.module}/Repository/{model}RepositoryInterface.php": generate_repository_interface(self.data, self.module),
+            f"app/Modules/{self.module}/Service/{model}Service.php": generate_service(self.data, self.module),
+            f"app/Modules/{self.module}/Controller/{model}Controller.php": generate_controller(self.data, self.module),
+            f"app/Modules/{self.module}/Request/{model}Request.php": generate_request(self.data, self.module),
+            str(migration_relative_path): generate_migration(self.data),
+            f"app/Modules/{self.module}/Routes/web.php": generate_routes(self.data, self.module),
+            f"resources/js/Pages/Modules/{self.module}/{model}/Index.jsx": generate_list(self.data),
+            f"resources/js/Pages/Modules/{self.module}/{model}/Form.jsx": generate_form(self.data),
+            f"resources/js/Pages/Modules/{self.module}/{model}/Show.jsx": generate_show(self.data),
         }
 
         for relative_path, content in files.items():
             file_path = self.project / relative_path
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content, encoding="utf-8")
-            print(f"✓ Created: {file_path}")
+            print(f"✓ Created: {relative_path}")
 
         self.register_module_routes()
         self.register_repository_binding()
-        print(f"\n✓ Module generated: {self.module}\n✓ Location: {self.module_dir}")
-        print("\nNext:\ncd", self.project, "\nphp artisan migrate")
+
+        print(f"\n✓ Module generation complete: {self.module}")
+        print("Next steps:")
+        print(f"  cd {self.project}")
+        print("  php artisan migrate")
 
 if __name__ == "__main__":
     parser = DSLParser(DSL)
