@@ -33,3 +33,7 @@ require __DIR__.'/../app/Modules/ResPartner/Routes/web.php';
 require __DIR__.'/../app/Modules/OrderLine/Routes/web.php';
 
 require __DIR__.'/../app/Modules/Product/Routes/web.php';
+
+require __DIR__.'/../app/Modules/Project/Routes/web.php';
+
+require __DIR__.'/../app/Modules/Sale/Routes/web.php';
