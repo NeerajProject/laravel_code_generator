@@ -330,13 +330,33 @@ class Generator:
             print('AUTO MASTER MODEL:', target)
 
     def model_path(self, model):
-        return os.path.join(self.project, 'app', 'Models', pascal_case(model['name']) + '.php')
+        return os.path.join(self.module_dir(), 'Model', pascal_case(model['name']) + '.php')
 
     def controller_path(self, model):
-        return os.path.join(self.project, 'app', 'Http', 'Controllers', pascal_case(model['name']) + 'Controller.php')
+        return os.path.join(self.module_dir(), 'Controller', pascal_case(model['name']) + 'Controller.php')
+
+    def module_dir(self):
+        return os.path.join(self.project, 'app', 'Modules', pascal_case(self.module))
+
+    def repository_path(self, model):
+        name = pascal_case(model['name'])
+        return os.path.join(self.module_dir(), 'Repository', name + 'Repository.php')
+
+    def repository_interface_path(self, model):
+        name = pascal_case(model['name'])
+        return os.path.join(self.module_dir(), 'Repository', name + 'RepositoryInterface.php')
+
+    def service_path(self, model):
+        return os.path.join(self.module_dir(), 'Service', pascal_case(model['name']) + 'Service.php')
+
+    def request_path(self, model):
+        return os.path.join(self.module_dir(), 'Request', pascal_case(model['name']) + 'Request.php')
+
+    def module_routes_path(self):
+        return os.path.join(self.module_dir(), 'Routes', 'web.php')
 
     def page_dir(self, model):
-        return os.path.join(self.project, 'resources', 'js', 'Pages', self.module, pascal_case(model['name']))
+        return os.path.join(self.module_dir(), 'Resources', 'js', pascal_case(model['name']))
 
     def migration_path(self, model):
         self.migration_index += 1
@@ -344,8 +364,11 @@ class Generator:
         prefix = timestamp.strftime('%Y_%m_%d_%H%M%S')
         return os.path.join(
             self.project,
-            'database',
-            'migrations',
+            'app',
+            'Modules',
+            pascal_case(self.module),
+            'Database',
+            'Migrations',
             f"{prefix}_create_{table_name(model['name'])}_table.php"
         )
 
@@ -417,11 +440,23 @@ class Generator:
         lines = [
             '<?php',
             '',
-            'namespace App\\Models;',
+            f'namespace App\\Modules\\{pascal_case(self.module)}\\Model;',
             '',
             'use Illuminate\\Database\\Eloquent\\Model;',
             'use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;',
             'use Illuminate\\Database\\Eloquent\\Relations\\HasMany;',
+            '',
+        ]
+        imported = set()
+        for field in model['fields'].values():
+            if is_m2o(field) or is_o2m(field):
+                target_name = pascal_case(relation_model(field))
+                if target_name not in imported:
+                    lines.append(
+                        f'use App\\Modules\\{pascal_case(self.module)}\\Model\\{target_name};'
+                    )
+                    imported.add(target_name)
+        lines += [
             '',
             f'class {class_name} extends Model',
             '{',
@@ -441,7 +476,7 @@ class Generator:
         for field in model['fields'].values():
             cast = laravel_cast(field)
             if cast:
-                lines.append(f"        '{field['name']}' => '{cast}',")
+                casts.append(f"        '{field['name']}' => '{cast}',")
 
         if casts:
             lines += ['', '    protected $casts = [', *casts, '    ];']
@@ -475,6 +510,113 @@ class Generator:
 
         lines += ['}', '']
         self.write(self.model_path(model), '\n'.join(lines))
+
+    def generate_repository(self, model):
+        name = pascal_case(model['name'])
+        namespace = f'App\\Modules\\{pascal_case(self.module)}'
+        fields = [field['name'] for field in model['fields'].values()
+                  if not is_o2m(field) and not is_computed(field)]
+        searchable = [field['name'] for field in model['fields'].values()
+                      if field_type(field) in ('char', 'text')]
+        lines = [
+            '<?php', '', f'namespace {namespace}\\Repository;', '',
+            f'use {namespace}\\Model\\{name};', '',
+            f'class {name}Repository implements {name}RepositoryInterface',
+            '{',
+            f'    public function __construct(protected {name} $model) {{}}', '',
+            '    public function all(array $filters = [], array $with = [])',
+            '    {',
+            '        $query = $this->model->newQuery()->with($with);',
+            '        foreach ($filters as $field => $value) {',
+            "            if ($field === 'search' && $value !== null && $value !== '') {",
+            '                $query->where(function ($q) use ($value) {',
+        ]
+        for index, field_name in enumerate(searchable):
+            method = 'where' if index == 0 else 'orWhere'
+            lines.append(
+                f"                    $q->{method}('{field_name}', 'like', '%' . $value . '%');"
+            )
+        if not searchable:
+            lines.append('                    $q->whereKey(0);')
+        lines += [
+            '                });',
+            '                continue;',
+            '            }',
+            f"            if (in_array($field, {repr(fields)}, true) && $value !== null && $value !== '') {{",
+            '                $query->where($field, $value);',
+            '            }',
+            '        }',
+            '        return $query->latest()->paginate(20)->withQueryString();',
+            '    }', '',
+            '    public function find($id, array $with = [])',
+            '    {',
+            '        return $this->model->with($with)->findOrFail($id);',
+            '    }', '',
+            '    public function create(array $data) { return $this->model->create($data); }', '',
+            '    public function update($id, array $data)',
+            '    {',
+            '        $record = $this->find($id);',
+            '        $record->update($data);',
+            '        return $record;',
+            '    }', '',
+            '    public function delete($id) { return $this->find($id)->delete(); }',
+            '}',
+            '',
+        ]
+        self.write(self.repository_path(model), '\n'.join(lines))
+
+        interface_lines = [
+            '<?php', '', f'namespace {namespace}\\Repository;', '',
+            f'interface {name}RepositoryInterface',
+            '{',
+            '    public function all(array $filters = [], array $with = []);',
+            '    public function find($id, array $with = []);',
+            '    public function create(array $data);',
+            '    public function update($id, array $data);',
+            '    public function delete($id);',
+            '}',
+            '',
+        ]
+        self.write(self.repository_interface_path(model), '\n'.join(interface_lines))
+
+    def generate_service(self, model):
+        name = pascal_case(model['name'])
+        namespace = f'App\\Modules\\{pascal_case(self.module)}'
+        lines = [
+            '<?php', '', f'namespace {namespace}\\Service;', '',
+            f'use {namespace}\\Repository\\{name}RepositoryInterface;', '',
+            f'class {name}Service',
+            '{',
+            f'    public function __construct(protected {name}RepositoryInterface $repository) {{}}',
+            '',
+            '    public function create(array $data) { return $this->repository->create($data); }',
+            '    public function update($id, array $data) { return $this->repository->update($id, $data); }',
+            '    public function delete($id) { return $this->repository->delete($id); }',
+            '}',
+            '',
+        ]
+        self.write(self.service_path(model), '\n'.join(lines))
+
+    def generate_request(self, model):
+        name = pascal_case(model['name'])
+        namespace = f'App\\Modules\\{pascal_case(self.module)}'
+        lines = [
+            '<?php', '', f'namespace {namespace}\\Request;', '',
+            'use Illuminate\\Foundation\\Http\\FormRequest;', '',
+            f'class {name}Request extends FormRequest',
+            '{',
+            '    public function authorize(): bool { return true; }', '',
+            '    public function rules(): array',
+            '    {',
+            '        return [',
+        ]
+        for field in model['fields'].values():
+            if is_o2m(field) or is_computed(field):
+                continue
+            rule = 'required' if field['required'] else 'nullable'
+            lines.append(f"            '{field['name']}' => '{rule}',")
+        lines += ['        ];', '    }', '}', '']
+        self.write(self.request_path(model), '\n'.join(lines))
 
     # ========================================================
     # MIGRATION GENERATION
@@ -619,29 +761,40 @@ class Generator:
 
     def generate_controller(self, model):
         class_name = pascal_case(model['name'])
+        module_namespace = f'App\\Modules\\{pascal_case(self.module)}'
         imports = [
             'use Illuminate\\Http\\Request;',
             'use Illuminate\\Support\\Facades\\DB;',
             'use Inertia\\Inertia;',
-            f"use App\\Models\\{class_name};",
+            f"use {module_namespace}\\Model\\{class_name};",
+            f"use {module_namespace}\\Repository\\{class_name}RepositoryInterface;",
+            f"use {module_namespace}\\Service\\{class_name}Service;",
+            f"use {module_namespace}\\Request\\{class_name}Request;",
         ]
 
         imported = {class_name}
         for field in self.relation_data_fields(model):
             target = pascal_case(relation_model(field))
             if target not in imported:
-                imports.append(f"use App\\Models\\{target};")
+                imports.append(f"use {module_namespace}\\Model\\{target};")
                 imported.add(target)
 
         lines = [
             '<?php',
             '',
-            'namespace App\\Http\\Controllers;',
+            f'namespace {module_namespace}\\Controller;',
             '',
             *imports,
             '',
+            'use App\\Http\\Controllers\\Controller;',
+            '',
             f"class {class_name}Controller extends Controller",
             '{',
+            f'    public function __construct(',
+            f'        protected {class_name}RepositoryInterface $repository,',
+            f'        protected {class_name}Service $service',
+            '    ) {}',
+            '',
             '    public function index(Request $request)',
             '    {',
             f"        $query = {class_name}::query();",
@@ -691,7 +844,7 @@ class Generator:
             '        );',
             '    }',
             '',
-            '    public function store(Request $request)',
+            f'    public function store({class_name}Request $request)',
             '    {',
             "        return DB::transaction(function () use ($request) {",
             "            $data = $request->except(['_token']);",
@@ -701,7 +854,7 @@ class Generator:
             if is_o2m(field) or is_computed(field):
                 lines.append(f"            unset($data['{field['name']}']);")
 
-        lines.append(f"            $record = {class_name}::create($data);")
+        lines.append("            $record = $this->service->create($data);")
         lines += self.o2m_save_lines(model, '$record', '            ')
         lines += self.parent_compute_lines(model, '$record', '            ')
 
@@ -731,7 +884,7 @@ class Generator:
             '        ]);',
             '    }',
             '',
-            f"    public function update(Request $request, {class_name} $record)",
+            f"    public function update({class_name}Request $request, {class_name} $record)",
             '    {',
             "        return DB::transaction(function () use ($request, $record) {",
             "            $data = $request->except(['_token', '_method']);",
@@ -741,7 +894,7 @@ class Generator:
             if is_o2m(field) or is_computed(field):
                 lines.append(f"            unset($data['{field['name']}']);")
 
-        lines.append("            $record->update($data);")
+        lines.append("            $record = $this->service->update($record->id, $data);")
 
         for field in model['fields'].values():
             if is_o2m(field):
@@ -759,7 +912,7 @@ class Generator:
             '',
             f"    public function destroy({class_name} $record)",
             '    {',
-            '        $record->delete();',
+            '        $this->service->delete($record->id);',
             "        return redirect()->back()->with('success', 'Deleted successfully.');",
             '    }',
             '',
@@ -1049,12 +1202,14 @@ class Generator:
     # ========================================================
 
     def generate_routes(self):
-        path = os.path.join(self.project, 'routes', 'generated.php')
+        path = self.module_routes_path()
         lines = ['<?php', '', 'use Illuminate\\Support\\Facades\\Route;', '']
 
         for model in self.models:
             class_name = pascal_case(model['name'])
-            lines.append(f"use App\\Http\\Controllers\\{class_name}Controller;")
+            lines.append(
+                f"use App\\Modules\\{pascal_case(self.module)}\\Controller\\{class_name}Controller;"
+            )
 
         lines.append('')
 
@@ -1069,7 +1224,9 @@ class Generator:
 
         web_path = os.path.join(self.project, 'routes', 'web.php')
         marker = '// DSL_GENERATED_ROUTES'
-        require_line = "require base_path('routes/generated.php');"
+        require_line = (
+            f"require app_path('Modules/{pascal_case(self.module)}/Routes/web.php');"
+        )
 
         if os.path.exists(web_path):
             with open(web_path, 'r', encoding='utf-8') as file:
@@ -1116,7 +1273,7 @@ class Generator:
             for filename in files:
                 full_path = os.path.join(root, filename)
                 relative = os.path.relpath(full_path, self.project)
-                if relative.startswith(('app/', 'database/migrations/', 'resources/js/Pages/', 'routes/')):
+                if relative.startswith(('app/Modules/', 'routes/')):
                     print(os.path.abspath(full_path))
 
     def generate(self):
@@ -1129,10 +1286,14 @@ class Generator:
 
         self.mkdir(self.project)
         directories = [
-            os.path.join(self.project, 'app', 'Models'),
-            os.path.join(self.project, 'app', 'Http', 'Controllers'),
-            os.path.join(self.project, 'database', 'migrations'),
-            os.path.join(self.project, 'resources', 'js', 'Pages', self.module),
+            os.path.join(self.module_dir(), 'Model'),
+            os.path.join(self.module_dir(), 'Repository'),
+            os.path.join(self.module_dir(), 'Service'),
+            os.path.join(self.module_dir(), 'Request'),
+            os.path.join(self.module_dir(), 'Controller'),
+            os.path.join(self.module_dir(), 'Database', 'Migrations'),
+            os.path.join(self.module_dir(), 'Resources', 'js'),
+            os.path.join(self.module_dir(), 'Routes'),
             os.path.join(self.project, 'routes'),
         ]
         for d in directories:
@@ -1141,6 +1302,9 @@ class Generator:
         for model in self.models:
             print('\nGenerating model:', model['name'])
             self.generate_model(model)
+            self.generate_repository(model)
+            self.generate_service(model)
+            self.generate_request(model)
 
         for model in self.dependency_order():
             print('\nGenerating migration:', model['name'])
