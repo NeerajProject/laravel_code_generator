@@ -26,14 +26,6 @@ Route::middleware('auth')->group(function () {
 
 require __DIR__.'/auth.php';
 
-require __DIR__.'/../app/Modules/SaleOrder/Routes/web.php';
 
-require __DIR__.'/../app/Modules/ResPartner/Routes/web.php';
-
-require __DIR__.'/../app/Modules/OrderLine/Routes/web.php';
-
-require __DIR__.'/../app/Modules/Product/Routes/web.php';
-
-require __DIR__.'/../app/Modules/Project/Routes/web.php';
-
-require __DIR__.'/../app/Modules/Sale/Routes/web.php';
+// DSL_GENERATED_ROUTES
+require base_path('routes/generated.php');

@@ -2,12 +2,17 @@
 
 namespace App\Modules\Sale\Controller;
 
-use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
+use App\Modules\Sale\Model\SaleOrder;
 use App\Modules\Sale\Repository\SaleOrderRepositoryInterface;
 use App\Modules\Sale\Service\SaleOrderService;
 use App\Modules\Sale\Request\SaleOrderRequest;
+use App\Modules\Sale\Model\ResPartner;
+use App\Modules\Sale\Model\ProductProduct;
+
+use App\Http\Controllers\Controller;
 
 class SaleOrderController extends Controller
 {
@@ -18,55 +23,114 @@ class SaleOrderController extends Controller
 
     public function index(Request $request)
     {
-        $filters = $request->get('filters', []);
-        if ($request->has('search') && !isset($filters['search'])) {
-            $filters['search'] = $request->get('search');
+        $query = SaleOrder::query();
+        $query->with(['customer', 'order_line_ids']);
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', '%' . $search . '%');
+                $q->orWhere('note', 'like', '%' . $search . '%');
+            });
         }
 
-        return Inertia::render('Modules/Sale/SaleOrder/Index', [
-            'records' => $this->repository->all($filters),
-            'filters' => $filters,
-        ]);
+        $records = $query->latest()->paginate(20)->withQueryString();
+
+        return Inertia::render('Sale/SaleOrder/Index', ['records' => $records]);
     }
 
     public function create()
     {
-        return Inertia::render('Modules/Sale/SaleOrder/Form', [
-            'record' => null,
-            'lookups' => [],
-        ]);
+        return Inertia::render(
+            'Sale/SaleOrder/Form',
+            [
+                'record' => null,
+                'relations' => $this->relationData(),
+            ]
+        );
     }
 
     public function store(SaleOrderRequest $request)
     {
-        $this->repository->create($request->validated());
-        return redirect()->route('sale.order.index');
+        return DB::transaction(function () use ($request) {
+            $data = $request->except(['_token']);
+            unset($data['amount_total']);
+            unset($data['order_line_ids']);
+            $record = $this->service->create($data);
+
+            foreach ($request->input('order_line_ids', []) as $lineData) {
+                $lineData['order_id'] = $record->id;
+                $lineData['subtotal'] = ($lineData['quantity'] ?? 0) * ($lineData['unit_price'] ?? 0);
+                SaleOrderLine::create($lineData);
+            }
+
+            $record->update([
+                'amount_total' => $record->order_line_ids()->sum('subtotal'),
+            ]);
+
+            return redirect()->route('sale.order.index')->with('success', 'Created successfully.');
+        });
     }
 
-    public function show($id)
+    public function show(SaleOrder $record)
     {
-        return Inertia::render('Modules/Sale/SaleOrder/Show', [
-            'record' => $this->repository->find($id),
+        $record->load($this->relations());
+        return Inertia::render('Sale/SaleOrder/Form', [
+            'record' => $record,
+            'relations' => $this->relationData(),
+            'readonly' => true,
         ]);
     }
 
-    public function edit($id)
+    public function edit(SaleOrder $record)
     {
-        return Inertia::render('Modules/Sale/SaleOrder/Form', [
-            'record' => $this->repository->find($id),
-            'lookups' => [],
+        $record->load($this->relations());
+        return Inertia::render('Sale/SaleOrder/Form', [
+            'record' => $record,
+            'relations' => $this->relationData(),
         ]);
     }
 
-    public function update(SaleOrderRequest $request, $id)
+    public function update(SaleOrderRequest $request, SaleOrder $record)
     {
-        $this->repository->update($id, $request->validated());
-        return redirect()->route('sale.order.index');
+        return DB::transaction(function () use ($request, $record) {
+            $data = $request->except(['_token', '_method']);
+            unset($data['amount_total']);
+            unset($data['order_line_ids']);
+            $record = $this->service->update($record->id, $data);
+            $record->order_line_ids()->delete();
+
+            foreach ($request->input('order_line_ids', []) as $lineData) {
+                $lineData['order_id'] = $record->id;
+                $lineData['subtotal'] = ($lineData['quantity'] ?? 0) * ($lineData['unit_price'] ?? 0);
+                SaleOrderLine::create($lineData);
+            }
+
+            $record->update([
+                'amount_total' => $record->order_line_ids()->sum('subtotal'),
+            ]);
+
+            return redirect()->route('sale.order.index')->with('success', 'Updated successfully.');
+        });
     }
 
-    public function destroy($id)
+    public function destroy(SaleOrder $record)
     {
-        $this->repository->delete($id);
-        return redirect()->route('sale.order.index');
+        $this->service->delete($record->id);
+        return redirect()->back()->with('success', 'Deleted successfully.');
+    }
+
+    private function relations(): array
+    {
+        return ["customer", "order_line_ids"];
+    }
+
+    private function relationData(): array
+    {
+        $relations = [];
+        $relations['customer_id'] = ResPartner::orderBy('name')->get(['id', 'name']);
+        $relations['order_id'] = SaleOrder::orderBy('name')->get(['id', 'name']);
+        $relations['product_id'] = ProductProduct::orderBy('name')->get(['id', 'name']);
+        return $relations;
     }
 }

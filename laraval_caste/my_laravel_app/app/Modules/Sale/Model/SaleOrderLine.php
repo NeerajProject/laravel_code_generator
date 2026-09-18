@@ -3,24 +3,37 @@
 namespace App\Modules\Sale\Model;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+
+use App\Modules\Sale\Model\SaleOrder;
+use App\Modules\Sale\Model\ProductProduct;
 
 class SaleOrderLine extends Model
 {
     protected $table = 'sale_order_lines';
 
     protected $fillable = [
-        'sale_order_id',
-        'name',
-        'description',
-        'is_done',
+        'order_id',
+        'product_id',
+        'quantity',
+        'unit_price',
+        'subtotal',
     ];
 
     protected $casts = [
-        'is_done' => 'boolean',
+        'quantity' => 'float',
+        'unit_price' => 'float',
+        'subtotal' => 'float',
     ];
 
-    public function project()
+    public function order(): BelongsTo
     {
-        return $this->belongsTo(SaleOrder::class, 'sale_order_id');
+        return $this->belongsTo(SaleOrder::class, 'order_id');
+    }
+
+    public function product(): BelongsTo
+    {
+        return $this->belongsTo(ProductProduct::class, 'product_id');
     }
 }

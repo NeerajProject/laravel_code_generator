@@ -3,6 +3,11 @@
 namespace App\Modules\Sale\Model;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+
+use App\Modules\Sale\Model\ResPartner;
+use App\Modules\Sale\Model\SaleOrderLine;
 
 class SaleOrder extends Model
 {
@@ -14,34 +19,21 @@ class SaleOrder extends Model
         'order_date',
         'state',
         'amount_total',
-        'note'
+        'note',
     ];
+
     protected $casts = [
         'order_date' => 'date',
         'amount_total' => 'float',
     ];
 
-    protected $appends = [
-        'amount_total'
-    ];
-
-    public function customer_id()
+    public function customer(): BelongsTo
     {
-        return $this->belongsTo(\App\Modules\Sale\Model\ResPartner::class, 'customer_id');
+        return $this->belongsTo(ResPartner::class, 'customer_id');
     }
 
-    public function order_line_ids()
+    public function order_line_ids(): HasMany
     {
-        return $this->hasMany(\App\Modules\Sale\Model\SaleOrderLine::class, 'sale_order_id');
-    }
-
-    public function getAmountTotalAttribute()
-    {
-        return $this->order_line_ids->sum('subtotal');
-    }
-
-    public function getComputeSubtotalAttribute()
-    {
-        return 0;
+        return $this->hasMany(SaleOrderLine::class, 'order_id');
     }
 }
