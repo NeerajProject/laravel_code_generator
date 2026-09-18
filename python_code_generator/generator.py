@@ -858,7 +858,7 @@ class Generator:
         lines += self.o2m_save_lines(model, '$record', '            ')
         lines += self.parent_compute_lines(model, '$record', '            ')
 
-        route_name = snake_case(model['name'])
+        route_name = model['name']
         lines += [
             '',
             f"            return redirect()->route('{route_name}.index')->with('success', 'Created successfully.');",
@@ -1216,7 +1216,7 @@ class Generator:
         for model in self.models:
             class_name = pascal_case(model['name'])
             url = model['url'].strip('/')
-            route_name = snake_case(model['name'])
+            route_name = model['name']
             lines.append(f"Route::resource('{url}', {class_name}Controller::class)->names('{route_name}')->parameters(['{url}' => 'record']);")
 
         lines.append('')
