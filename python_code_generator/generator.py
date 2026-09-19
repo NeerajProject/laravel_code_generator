@@ -9,77 +9,117 @@ from datetime import datetime, timedelta
 
 DSL = r'''
 project = "/home/nj/workspace/laravel_code_generator/laravel_code_generator/laraval_caste/my_laravel_app"
-module:Sale
+module:Project
 
-sale.order
-url:/sale-orders
+project.project
+url:/projects
 
 name:char*
-customer_id:m2o(res.partner)
-order_date:date
-state:selection(draft,confirmed,cancelled)
-amount_total:float=compute_total
-note:text
-order_line_ids:o2m(sale.order.line)
+manager_id:m2o(res.users)
+start_date:date
+end_date:date
+state:selection(draft,in_progress,completed,cancelled)
+description:text
+task_ids:o2m(project.task)
 
 list:
     name
-    customer_id
-    order_date
+    manager_id
+    start_date
     state
-    amount_total
 
 filter:
     name
-    customer_id
-    order_date
+    manager_id
     state
 
 form:
     name
-    customer_id
-    order_date
+    manager_id
+    start_date
+    end_date
     state
-    order_line_ids
-    note
-    amount_total
-
-compute:
-    compute_total:
-        sum(order_line_ids.subtotal)
+    description
+    task_ids
 
 menu:
-    Sale/Sale Orders
+    Project/Projects
 
 
-sale.order.line
-url:/sale-order-lines
+project.task
+url:/project-tasks
 
-order_id:m2o(sale.order)
-product_id:m2o(product.product)
-quantity:float
-unit_price:float
-subtotal:float=compute_subtotal
+name:char*
+project_id:m2o(project.project)
+assignee_id:m2o(res.users)
+deadline:date
+state:selection(new,in_progress,review,done)
+description:text
+timesheet_ids:o2m(project.timesheet)
+total_hours:float=compute_total_hours
 
 list:
-    product_id
-    quantity
-    unit_price
-    subtotal
+    name
+    project_id
+    assignee_id
+    state
+    deadline
+    total_hours
 
 filter:
-    product_id
-    order_id
+    name
+    project_id
+    assignee_id
+    state
 
 form:
-    product_id
-    quantity
-    unit_price
-    subtotal
+    name
+    project_id
+    assignee_id
+    deadline
+    state
+    description
+    timesheet_ids
+    total_hours
 
 compute:
-    compute_subtotal:
-        quantity * unit_price
+    compute_total_hours:
+        sum(timesheet_ids.hours)
+
+menu:
+    Project/Tasks
+
+
+project.timesheet
+url:/project-timesheets
+
+date:date*
+task_id:m2o(project.task)
+employee_id:m2o(hr.employee)
+description:char
+hours:float*
+
+list:
+    date
+    task_id
+    employee_id
+    hours
+    description
+
+filter:
+    task_id
+    employee_id
+    date
+
+form:
+    date
+    task_id
+    employee_id
+    hours
+    description
+
+menu:
+    Project/Timesheets
 '''
 
 
