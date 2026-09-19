@@ -4,7 +4,7 @@ import { Head, Link, useForm } from '@inertiajs/react';
 export default function Form({ record, relations = {}, readonly = false }) {
     const isEdit = !!record?.id;
 
-    const { data, setData, post, put, processing } = useForm({
+    const { data, setData, post, put, processing, errors } = useForm({
         product_id: record?.product_id ?? record?.product?.id ?? '',
         quantity: record?.quantity ?? '',
         unit_price: record?.unit_price ?? '',
@@ -14,50 +14,101 @@ export default function Form({ record, relations = {}, readonly = false }) {
     const submit = (e) => {
         e.preventDefault();
         if (isEdit) {
-            put(`$/sale-order-lines/${record.id}`);
+            put(`/sale-order-lines/${record.id}`);
         } else {
             post('/sale-order-lines');
         }
     };
 
     return (
-        <div className="p-6 max-w-6xl mx-auto">
+        <div className="min-h-screen bg-slate-50">
             <Head title="Sale Order Line" />
-            <div className="flex justify-between mb-6">
-                <h1 className="text-2xl font-bold">{isEdit ? 'Edit' : 'Create'} Sale Order Line</h1>
-                <Link href="/sale-order-lines" className="border px-4 py-2 rounded">Back</Link>
+
+            {/* Page Header */}
+            <div className="bg-white border-b border-slate-200">
+                <div className="max-w-5xl mx-auto px-6 py-5">
+                    <div className="flex items-center justify-between flex-wrap gap-3">
+                        <div>
+                            <nav className="text-xs text-slate-500 mb-1">
+                                <Link href="/sale-order-lines" className="hover:text-slate-700">Home</Link>
+                                <span className="mx-1.5">/</span>
+                                <Link href="/sale-order-lines" className="hover:text-slate-700">Sale Order Line</Link>
+                                <span className="mx-1.5">/</span>
+                                <span className="text-slate-700 font-medium">{isEdit ? 'Edit' : 'New'}</span>
+                            </nav>
+                            <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">
+                                {isEdit ? 'Edit' : 'New'} Sale Order Line
+                            </h1>
+                        </div>
+                        <Link href="/sale-order-lines" className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+                            Back
+                        </Link>
+                    </div>
+                </div>
             </div>
-            <form onSubmit={submit} className="space-y-5">
 
-                <div>
-                    <label className="block mb-1 font-medium">Product Id</label>
-                    <select value={data.product_id} disabled={readonly} onChange={(e) => setData('product_id', e.target.value)} className="border rounded px-3 py-2 w-full">
-                        <option value="">Select...</option>
-                        {(relations['product_id'] || []).map((item) => (
-                            <option key={item.id} value={item.id}>{item.name}</option>
-                        ))}
-                    </select>
+            <form onSubmit={submit} className="max-w-5xl mx-auto px-6 py-6 space-y-6">
+                {/* Details Section */}
+                <div className="bg-white rounded-lg shadow-sm border border-slate-200">
+                    <div className="px-6 py-4 border-b border-slate-200 flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-md bg-blue-50 flex items-center justify-center">
+                            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                        </div>
+                        <div>
+                            <h2 className="text-sm font-semibold text-slate-800">Details</h2>
+                            <p className="text-xs text-slate-500">Basic information about this record</p>
+                        </div>
+                    </div>
+                    <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-x-5 gap-y-5">
+
+                        <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1.5">Product Id</label>
+                            <select value={data.product_id} disabled={readonly} onChange={(e) => setData('product_id', e.target.value)} className="w-full text-sm text-slate-800 bg-white border border-slate-300 rounded-md px-3 py-2 placeholder:text-slate-400 transition focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 disabled:bg-slate-50 disabled:text-slate-500 read-only:bg-slate-50">
+                                <option value="">Select...</option>
+                                {(relations['product_id'] || []).map((item) => (
+                                    <option key={item.id} value={item.id}>{item.name}</option>
+                                ))}
+                            </select>
+                            {errors.product_id && <p className="mt-1 text-xs text-rose-600">{errors.product_id}</p>}
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1.5">Quantity</label>
+                            <input type="number" step="0.01"  value={data.quantity} readOnly={readonly} onChange={(e) => setData('quantity', e.target.value)} className="w-full text-sm text-slate-800 bg-white border border-slate-300 rounded-md px-3 py-2 placeholder:text-slate-400 transition focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 disabled:bg-slate-50 disabled:text-slate-500 read-only:bg-slate-50" />
+                            {errors.quantity && <p className="mt-1 text-xs text-rose-600">{errors.quantity}</p>}
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1.5">Unit Price</label>
+                            <input type="number" step="0.01"  value={data.unit_price} readOnly={readonly} onChange={(e) => setData('unit_price', e.target.value)} className="w-full text-sm text-slate-800 bg-white border border-slate-300 rounded-md px-3 py-2 placeholder:text-slate-400 transition focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 disabled:bg-slate-50 disabled:text-slate-500 read-only:bg-slate-50" />
+                            {errors.unit_price && <p className="mt-1 text-xs text-rose-600">{errors.unit_price}</p>}
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1.5">Subtotal</label>
+                            <input value={data.subtotal} readOnly className="w-full text-sm font-medium text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-3 py-2" />
+                            {errors.subtotal && <p className="mt-1 text-xs text-rose-600">{errors.subtotal}</p>}
+                        </div>
+                    </div>
                 </div>
 
-                <div>
-                    <label className="block mb-1 font-medium">Quantity</label>
-                    <input type="number" value={data.quantity} readOnly={readonly} required={false} onChange={(e) => setData('quantity', e.target.value)} className="border rounded px-3 py-2 w-full" />
-                </div>
-
-                <div>
-                    <label className="block mb-1 font-medium">Unit Price</label>
-                    <input type="number" value={data.unit_price} readOnly={readonly} required={false} onChange={(e) => setData('unit_price', e.target.value)} className="border rounded px-3 py-2 w-full" />
-                </div>
-
-                <div>
-                    <label className="block mb-1 font-medium">Subtotal</label>
-                    <input value={data.subtotal} readOnly className="border rounded px-3 py-2 w-full bg-gray-100" />
-                </div>
-
+                {/* Actions */}
                 {!readonly && (
-                    <button type="submit" disabled={processing} className="px-5 py-2 bg-blue-600 text-white rounded">
-                        {isEdit ? 'Update' : 'Save'}
-                    </button>
+                    <div className="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-4 flex items-center justify-between flex-wrap gap-3 sticky bottom-4">
+                        <p className="text-xs text-slate-500">
+                            Fields marked <span className="text-rose-500">*</span> are required
+                        </p>
+                        <div className="flex items-center gap-2">
+                            <Link href="/sale-order-lines" className="inline-flex items-center px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition">Cancel</Link>
+                            <button type="submit" disabled={processing} className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60 disabled:cursor-not-allowed transition">
+                                {processing && (
+                                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>
+                                )}
+                                {isEdit ? 'Update' : 'Save'}
+                            </button>
+                        </div>
+                    </div>
                 )}
             </form>
         </div>

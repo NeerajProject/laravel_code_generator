@@ -7,20 +7,17 @@ export default function Form({ record }) {
     const { data, setData, post, put, processing, errors } = useForm({
         name: record?.name || '',
         date: record?.date || '',
-        res.partner: record?.res.partner || '',
-        name:char*: record?.name:char* || '',
-        email:char: record?.email:char || '',
-        is_company:boolean: record?.is_company:boolean || '',
-        name: record?.name || '',
+        resPartner: record?.res?.partner || '',
         email: record?.email || '',
+        isCompany: record?.is_company || '',
     });
 
     const handleSubmit = (e) => {
         e.preventDefault();
         if (isEdit) {
-            put(\`/partners/\${record.id}\`);
+            put(`/partners/${record.id}`);
         } else {
-            post(\`/partners\`);
+            post(`/partners`);
         }
     };
 

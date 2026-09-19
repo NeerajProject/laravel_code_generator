@@ -35,7 +35,10 @@ class SaleOrderLineController extends Controller
 
         $records = $query->latest()->paginate(20)->withQueryString();
 
-        return Inertia::render('Sale/SaleOrderLine/Index', ['records' => $records]);
+        return Inertia::render('Sale/SaleOrderLine/Index', [
+            'records' => $records,
+            'filters' => $request->only('search'),
+        ]);
     }
 
     public function create()

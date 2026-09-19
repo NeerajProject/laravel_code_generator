@@ -36,7 +36,10 @@ class SaleOrderController extends Controller
 
         $records = $query->latest()->paginate(20)->withQueryString();
 
-        return Inertia::render('Sale/SaleOrder/Index', ['records' => $records]);
+        return Inertia::render('Sale/SaleOrder/Index', [
+            'records' => $records,
+            'filters' => $request->only('search'),
+        ]);
     }
 
     public function create()
@@ -68,7 +71,7 @@ class SaleOrderController extends Controller
                 'amount_total' => $record->order_line_ids()->sum('subtotal'),
             ]);
 
-          
+            return redirect()->route('sale.order.index')->with('success', 'Created successfully.');
         });
     }
 
@@ -129,7 +132,6 @@ class SaleOrderController extends Controller
     {
         $relations = [];
         $relations['customer_id'] = ResPartner::orderBy('name')->get(['id', 'name']);
-        $relations['order_id'] = SaleOrder::orderBy('name')->get(['id', 'name']);
         $relations['product_id'] = ProductProduct::orderBy('name')->get(['id', 'name']);
         return $relations;
     }

@@ -130,7 +130,6 @@ def relation_model(field):
 
 
 def relation_method_name(field_name):
-    """Strips trailing _id for Eloquent belongsTo relation methods to avoid attribute collisions."""
     if field_name.endswith('_id'):
         return field_name[:-3]
     return field_name
@@ -194,7 +193,6 @@ def parse_dsl(dsl):
             module = stripped.split(':', 1)[1].strip()
             continue
 
-        # MODEL HEADER
         if indent == 0 and ':' not in stripped and not stripped.endswith(':'):
             current_model = {
                 'name': stripped,
@@ -245,7 +243,6 @@ def parse_dsl(dsl):
             current_model[current_section].append(stripped)
             continue
 
-        # FIELD DEFINITION
         if current_section is None and ':' in stripped:
             name, definition = stripped.split(':', 1)
             required = definition.endswith('*')
@@ -329,14 +326,18 @@ class Generator:
             self.model_map[target] = model
             print('AUTO MASTER MODEL:', target)
 
+    # --------------------------------------------------------
+    # Paths
+    # --------------------------------------------------------
+
+    def module_dir(self):
+        return os.path.join(self.project, 'app', 'Modules', pascal_case(self.module))
+
     def model_path(self, model):
         return os.path.join(self.module_dir(), 'Model', pascal_case(model['name']) + '.php')
 
     def controller_path(self, model):
         return os.path.join(self.module_dir(), 'Controller', pascal_case(model['name']) + 'Controller.php')
-
-    def module_dir(self):
-        return os.path.join(self.project, 'app', 'Modules', pascal_case(self.module))
 
     def repository_path(self, model):
         name = pascal_case(model['name'])
@@ -356,21 +357,32 @@ class Generator:
         return os.path.join(self.module_dir(), 'Routes', 'web.php')
 
     def page_dir(self, model):
-        return os.path.join(self.module_dir(), 'Resources', 'js', pascal_case(model['name']))
+        # Inertia renders '<Module>/<Model>/Index', which the default resolver
+        # (./Pages/${name}.jsx) maps to resources/js/Pages/<Module>/<Model>/Index.jsx
+        return os.path.join(
+            self.project, 'resources', 'js', 'Pages',
+            pascal_case(self.module), pascal_case(model['name'])
+        )
 
     def migration_path(self, model):
         self.migration_index += 1
+        table = table_name(model['name'])
+        mig_dir = os.path.join(self.module_dir(), 'Database', 'Migrations')
+
+        # Remove older generated migrations for this table so re-running the
+        # generator doesn't cause "table already exists" on migrate.
+        if os.path.isdir(mig_dir):
+            for filename in os.listdir(mig_dir):
+                if filename.endswith(f'_create_{table}_table.php'):
+                    os.remove(os.path.join(mig_dir, filename))
+
         timestamp = datetime.now() + timedelta(seconds=self.migration_index)
         prefix = timestamp.strftime('%Y_%m_%d_%H%M%S')
-        return os.path.join(
-            self.project,
-            'app',
-            'Modules',
-            pascal_case(self.module),
-            'Database',
-            'Migrations',
-            f"{prefix}_create_{table_name(model['name'])}_table.php"
-        )
+        return os.path.join(mig_dir, f"{prefix}_create_{table}_table.php")
+
+    # --------------------------------------------------------
+    # Relation helpers
+    # --------------------------------------------------------
 
     def inverse_fk(self, parent_name, child_model):
         for field in child_model['fields'].values():
@@ -413,14 +425,23 @@ class Generator:
         return relations
 
     def relation_data_fields(self, model):
+        """m2o fields that need dropdown data on the form.
+
+        Includes the model's own m2o fields plus the m2o fields of o2m child
+        lines, except the inverse FK pointing back to this model (that one is
+        set automatically and never shown as a dropdown).
+        """
         fields = []
         for field in model['fields'].values():
             if is_m2o(field):
                 fields.append(field)
             elif is_o2m(field):
                 child = self.model_map[relation_model(field)]
+                inverse = self.inverse_fk(model['name'], child)
                 for child_field in child['fields'].values():
-                    if is_m2o(child_field):
+                    if (is_m2o(child_field)
+                            and child_field['name'] in child['form']
+                            and foreign_key_col(child_field['name']) != inverse):
                         fields.append(child_field)
 
         result = []
@@ -451,7 +472,8 @@ class Generator:
         for field in model['fields'].values():
             if is_m2o(field) or is_o2m(field):
                 target_name = pascal_case(relation_model(field))
-                if target_name not in imported:
+                # Same namespace, so never import the class itself
+                if target_name != class_name and target_name not in imported:
                     lines.append(
                         f'use App\\Modules\\{pascal_case(self.module)}\\Model\\{target_name};'
                     )
@@ -830,7 +852,10 @@ class Generator:
             '',
             "        $records = $query->latest()->paginate(20)->withQueryString();",
             '',
-            f"        return Inertia::render('{self.module}/{class_name}/Index', ['records' => $records]);",
+            f"        return Inertia::render('{self.module}/{class_name}/Index', [",
+            "            'records' => $records,",
+            "            'filters' => $request->only('search'),",
+            '        ]);',
             '    }',
             '',
             '    public function create()',
@@ -946,78 +971,192 @@ class Generator:
     def generate_index(self, model):
         path = os.path.join(self.page_dir(model), 'Index.jsx')
         url = model['url']
+        title = label(model['name'])
+        col_count = len(model['list']) + 1
 
-        lines = [
-            "import React, { useState } from 'react';",
-            "import { Head, Link, router } from '@inertiajs/react';",
-            '',
-            "export default function Index({ records }) {",
-            "    const [search, setSearch] = useState('');",
-            '',
-            "    const submitSearch = (e) => {",
-            "        e.preventDefault();",
-            f"        router.get('{url}', {{ search }}, {{ preserveState: true, replace: true }});",
-            "    };",
-            '',
-            "    const remove = (id) => {",
-            "        if (!confirm('Delete this record?')) return;",
-            f"        router.delete(`${url}/${{id}}`);",
-            "    };",
-            '',
-            '    return (',
-            '        <div className="p-6">',
-            f'            <Head title="{label(model["name"])}" />',
-            '            <div className="flex justify-between mb-6">',
-            f'                <h1 className="text-2xl font-bold">{label(model["name"])}</h1>',
-            f'                <Link href="{url}/create" className="px-4 py-2 bg-blue-600 text-white rounded">Create</Link>',
-            '            </div>',
-            '            <form onSubmit={submitSearch} className="mb-4 flex gap-2">',
-            '                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search..." className="border rounded px-3 py-2" />',
-            '                <button className="border px-4 py-2 rounded">Search</button>',
-            '            </form>',
-            '            <div className="overflow-x-auto">',
-            '                <table className="w-full border">',
-            '                    <thead>',
-            '                        <tr>',
-        ]
+        lines = []
+        add = lines.append
+
+        add("import React, { useState } from 'react';")
+        add("import { Head, Link, router } from '@inertiajs/react';")
+        add('')
+        add('export default function Index({ records, filters = {} }) {')
+        add("    const [search, setSearch] = useState(filters.search || '');")
+        add('')
+        add('    const submitSearch = (e) => {')
+        add('        e.preventDefault();')
+        add(f"        router.get('{url}', {{ search }}, {{ preserveState: true, replace: true }});")
+        add('    };')
+        add('')
+        add('    const remove = (id) => {')
+        add("        if (!confirm('Delete this record?')) return;")
+        add(f"        router.delete(`{url}/${{id}}`);")
+        add('    };')
+        add('')
+        add('    return (')
+        add('        <div className="min-h-screen bg-slate-50">')
+        add(f'            <Head title="{title}" />')
+        add('')
+        add('            {/* Page Header */}')
+        add('            <div className="bg-white border-b border-slate-200">')
+        add('                <div className="max-w-7xl mx-auto px-6 py-5">')
+        add('                    <div className="flex items-center justify-between flex-wrap gap-3">')
+        add('                        <div>')
+        add('                            <nav className="text-xs text-slate-500 mb-1">')
+        add(f'                                <span>Home</span>')
+        add('                                <span className="mx-1.5">/</span>')
+        add(f'                                <span className="text-slate-700 font-medium">{title}</span>')
+        add('                            </nav>')
+        add(f'                            <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">{title}</h1>')
+        add('                        </div>')
+        add('                        <div className="flex items-center gap-2">')
+        add('                            <button type="button" className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition">')
+        add('                                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>')
+        add('                                Filter')
+        add('                            </button>')
+        add('                            <button type="button" className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition">')
+        add('                                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>')
+        add('                                Export')
+        add('                            </button>')
+        add(f'                            <Link href="{url}/create" className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 transition">')
+        add('                                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>')
+        add('                                New Record')
+        add('                            </Link>')
+        add('                        </div>')
+        add('                    </div>')
+        add('                </div>')
+        add('            </div>')
+        add('')
+        add('            <div className="max-w-7xl mx-auto px-6 py-6">')
+        add('                <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">')
+        add('')
+        add('                    {/* Toolbar */}')
+        add('                    <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">')
+        add('                        <form onSubmit={submitSearch} className="relative flex-1 max-w-md">')
+        add('                            <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">')
+        add('                                <circle cx="11" cy="11" r="7" />')
+        add('                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35" />')
+        add('                            </svg>')
+        add('                            <input')
+        add('                                value={search}')
+        add('                                onChange={(e) => setSearch(e.target.value)}')
+        add('                                placeholder="Search records..."')
+        add('                                className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-md placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition"')
+        add('                            />')
+        add('                        </form>')
+        add('                        <div className="text-xs text-slate-500">')
+        add('                            {records.total !== undefined ? `${records.total} record${records.total !== 1 ? \'s\' : \'\'}` : \'\'}')
+        add('                        </div>')
+        add('                    </div>')
+        add('')
+        add('                    {/* Table */}')
+        add('                    <div className="overflow-x-auto">')
+        add('                        <table className="w-full text-sm">')
+        add('                            <thead>')
+        add('                                <tr className="bg-slate-50 border-b border-slate-200">')
+        add('                                    <th className="w-10 px-4 py-3">')
+        add('                                        <input type="checkbox" className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />')
+        add('                                    </th>')
 
         for field_name in model['list']:
-            lines.append(f'                            <th className="border p-2 text-left">{label(field_name)}</th>')
+            add(f'                                    <th className="px-5 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">{label(field_name)}</th>')
 
-        lines += [
-            '                            <th className="border p-2">Actions</th>',
-            '                        </tr>',
-            '                    </thead>',
-            '                    <tbody>',
-            '                        {records.data.map((row) => (',
-            '                            <tr key={row.id}>',
-        ]
+        add('                                    <th className="px-5 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">Actions</th>')
+        add('                                </tr>')
+        add('                            </thead>')
+        add('                            <tbody className="divide-y divide-slate-100">')
+        add('                                {records.data.length === 0 && (')
+        add('                                    <tr>')
+        add(f'                                        <td colSpan={{{col_count + 1}}} className="px-6 py-16 text-center">')
+        add('                                            <div className="flex flex-col items-center gap-2 text-slate-400">')
+        add('                                                <svg className="w-12 h-12" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">')
+        add('                                                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />')
+        add('                                                </svg>')
+        add('                                                <p className="text-sm font-medium">No records found</p>')
+        add('                                                <p className="text-xs">Try adjusting your search or create a new record.</p>')
+        add('                                            </div>')
+        add('                                        </td>')
+        add('                                    </tr>')
+        add('                                )}')
+        add('                                {records.data.map((row) => (')
+        add('                                    <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">')
+        add('                                        <td className="px-4 py-3">')
+        add('                                            <input type="checkbox" className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />')
+        add('                                        </td>')
 
         for field_name in model['list']:
             field = model['fields'].get(field_name)
+            add('                                        <td className="px-5 py-3 text-slate-700 whitespace-nowrap">')
+
             if field and is_m2o(field):
                 rel = relation_method_name(field_name)
-                value = f"row.{rel}?.name || row.{field_name} || '-'"
+                add(f'                                            {{row.{rel}?.name || row.{field_name} || \'-\'}}')
+            elif field and is_selection(field):
+                add(f'                                            {{row.{field_name} ? (')
+                add(f'                                                <span className={{')
+                add(f'                                                    \'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium \' +')
+                add(f"                                                    (row.{field_name} === 'confirmed' ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' :")
+                add(f"                                                     row.{field_name} === 'cancelled' ? 'bg-rose-50 text-rose-700 ring-1 ring-rose-200' :")
+                add(f"                                                     'bg-slate-100 text-slate-700 ring-1 ring-slate-200')")
+                add('                                                }>')
+                add(f'                                                    {{row.{field_name}}}')
+                add('                                                </span>')
+                add('                                            ) : \'-\'}')
+            elif field and field_type(field) == 'bool':
+                add(f'                                            {{row.{field_name} ? (')
+                add('                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">Yes</span>')
+                add('                                            ) : (')
+                add('                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 ring-1 ring-slate-200">No</span>')
+                add('                                            )}')
+            elif field and field_type(field) == 'float':
+                add(f'                                            <span className="font-medium text-slate-900 tabular-nums">{{Number(row.{field_name} ?? 0).toFixed(2)}}</span>')
             else:
-                value = f"row.{field_name} ?? '-'"
+                add(f'                                            {{row.{field_name} ?? \'-\'}}')
 
-            lines.append(f'                                <td className="border p-2">{{{value}}}</td>')
+            add('                                        </td>')
 
-        lines += [
-            '                                <td className="border p-2">',
-            f'                                    <Link href={{`{url}/${{row.id}}/edit`}} className="mr-3 text-blue-600">Edit</Link>',
-            '                                    <button onClick={() => remove(row.id)} className="text-red-600">Delete</button>',
-            '                                </td>',
-            '                            </tr>',
-            '                        ))}',
-            '                    </tbody>',
-            '                </table>',
-            '            </div>',
-            '        </div>',
-            '    );',
-            '}',
-            '',
-        ]
+        add('                                        <td className="px-5 py-3 text-right whitespace-nowrap">')
+        add('                                            <div className="inline-flex items-center gap-1">')
+        add(f'                                                <Link href={{`{url}/${{row.id}}/edit`}} className="inline-flex items-center justify-center w-8 h-8 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-md transition" title="Edit">')
+        add('                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>')
+        add('                                                </Link>')
+        add('                                                <button onClick={() => remove(row.id)} className="inline-flex items-center justify-center w-8 h-8 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-md transition" title="Delete">')
+        add('                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" /></svg>')
+        add('                                                </button>')
+        add('                                            </div>')
+        add('                                        </td>')
+        add('                                    </tr>')
+        add('                                ))}')
+        add('                            </tbody>')
+        add('                        </table>')
+        add('                    </div>')
+        add('')
+        add('                    {/* Pagination */}')
+        add('                    {records.links && records.links.length > 3 && (')
+        add('                        <div className="px-5 py-3 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50/40">')
+        add('                            <div className="text-xs text-slate-500">')
+        add('                                Showing <span className="font-medium text-slate-700">{records.from ?? 0}</span> to <span className="font-medium text-slate-700">{records.to ?? 0}</span> of <span className="font-medium text-slate-700">{records.total}</span> entries')
+        add('                            </div>')
+        add('                            <div className="flex items-center gap-1">')
+        add('                                {records.links.map((link, i) => (')
+        add('                                    <button')
+        add('                                        key={i}')
+        add('                                        disabled={!link.url}')
+        add('                                        onClick={() => link.url && router.get(link.url, {}, { preserveState: true })}')
+        add('                                        dangerouslySetInnerHTML={{ __html: link.label }}')
+        add("                                        className={`min-w-[32px] h-8 px-2 text-xs font-medium rounded-md border transition ${link.active ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'} ${!link.url ? 'opacity-40 cursor-not-allowed' : ''}`}")
+        add('                                    />')
+        add('                                ))}')
+        add('                            </div>')
+        add('                        </div>')
+        add('                    )}')
+        add('                </div>')
+        add('            </div>')
+        add('        </div>')
+        add('    );')
+        add('}')
+        add('')
+
         self.write(path, '\n'.join(lines))
 
     # ========================================================
@@ -1027,174 +1166,311 @@ class Generator:
     def generate_form(self, model):
         path = os.path.join(self.page_dir(model), 'Form.jsx')
         url = model['url']
+        title = label(model['name'])
 
-        lines = [
-            "import React from 'react';",
-            "import { Head, Link, useForm } from '@inertiajs/react';",
-            '',
-            "export default function Form({ record, relations = {}, readonly = false }) {",
-            "    const isEdit = !!record?.id;",
-            '',
-            "    const { data, setData, post, put, processing } = useForm({",
-        ]
+        lines = []
+        add = lines.append
+
+        add("import React from 'react';")
+        add("import { Head, Link, useForm } from '@inertiajs/react';")
+        add('')
+        add('export default function Form({ record, relations = {}, readonly = false }) {')
+        add('    const isEdit = !!record?.id;')
+        add('')
+        add('    const { data, setData, post, put, processing, errors } = useForm({')
 
         for field_name in model['form']:
             field = model['fields'].get(field_name)
             if not field:
                 continue
-
             if is_o2m(field):
-                lines.append(f"        {field_name}: record?.{field_name} || [],")
+                add(f"        {field_name}: record?.{field_name} || [],")
             elif is_m2o(field):
                 rel = relation_method_name(field_name)
-                lines.append(f"        {field_name}: record?.{field_name} ?? record?.{rel}?.id ?? '',")
+                add(f"        {field_name}: record?.{field_name} ?? record?.{rel}?.id ?? '',")
             elif field_type(field) == 'bool':
-                lines.append(f"        {field_name}: record?.{field_name} ?? false,")
+                add(f"        {field_name}: record?.{field_name} ?? false,")
             else:
-                lines.append(f"        {field_name}: record?.{field_name} ?? '',")
+                add(f"        {field_name}: record?.{field_name} ?? '',")
 
-        lines += [
-            '    });',
-            '',
-            '    const submit = (e) => {',
-            '        e.preventDefault();',
-            '        if (isEdit) {',
-            f"            put(`${url}/${{record.id}}`);",
-            '        } else {',
-            f"            post('{url}');",
-            '        }',
-            '    };',
-        ]
+        add('    });')
+        add('')
+        add('    const submit = (e) => {')
+        add('        e.preventDefault();')
+        add('        if (isEdit) {')
+        add(f"            put(`{url}/${{record.id}}`);")
+        add('        } else {')
+        add(f"            post('{url}');")
+        add('        }')
+        add('    };')
 
+        # o2m helpers
         for field in model['fields'].values():
             if not is_o2m(field):
                 continue
-
             relation = field['name']
             child = self.model_map[relation_model(field)]
-            func_name = 'add' + pascal_case(relation)
+            add_fn = 'add' + pascal_case(relation)
+            remove_fn = 'remove' + pascal_case(relation)
+            update_fn = 'update' + pascal_case(relation)
 
-            lines += [
-                '',
-                f"    const {func_name} = () => {{",
-                f"        setData('{relation}', [...(data.{relation} || []), {{",
-            ]
-
+            add('')
+            add(f'    const {add_fn} = () => {{')
+            add(f"        setData('{relation}', [")
+            add(f"            ...(data.{relation} || []),")
+            add('            {')
             for child_name in child['form']:
                 child_field = child['fields'].get(child_name)
                 if child_field and not is_computed(child_field):
-                    lines.append(f"            {child_name}: '',")
+                    add(f"                {child_name}: '',")
+            add('            },')
+            add('        ]);')
+            add('    };')
 
-            lines += ['        }]);', '    };']
+            add('')
+            add(f'    const {remove_fn} = (index) => {{')
+            add(f"        setData('{relation}', (data.{relation} || []).filter((_, i) => i !== index));")
+            add('    };')
 
-        lines += [
-            '',
-            '    return (',
-            '        <div className="p-6 max-w-6xl mx-auto">',
-            f'            <Head title="{label(model["name"])}" />',
-            '            <div className="flex justify-between mb-6">',
-            f'                <h1 className="text-2xl font-bold">{{isEdit ? \'Edit\' : \'Create\'}} {label(model["name"])}</h1>',
-            f'                <Link href="{url}" className="border px-4 py-2 rounded">Back</Link>',
-            '            </div>',
-            '            <form onSubmit={submit} className="space-y-5">',
-        ]
+            add('')
+            add(f'    const {update_fn} = (index, key, value) => {{')
+            add(f"        const copy = [...(data.{relation} || [])];")
+            add('        copy[index] = { ...copy[index], [key]: value };')
+            add(f"        setData('{relation}', copy);")
+            add('    };')
 
+        add('')
+        add('    return (')
+        add('        <div className="min-h-screen bg-slate-50">')
+        add(f'            <Head title="{title}" />')
+        add('')
+        add('            {/* Page Header */}')
+        add('            <div className="bg-white border-b border-slate-200">')
+        add('                <div className="max-w-5xl mx-auto px-6 py-5">')
+        add('                    <div className="flex items-center justify-between flex-wrap gap-3">')
+        add('                        <div>')
+        add('                            <nav className="text-xs text-slate-500 mb-1">')
+        add(f'                                <Link href="{url}" className="hover:text-slate-700">Home</Link>')
+        add('                                <span className="mx-1.5">/</span>')
+        add(f'                                <Link href="{url}" className="hover:text-slate-700">{title}</Link>')
+        add('                                <span className="mx-1.5">/</span>')
+        add("                                <span className=\"text-slate-700 font-medium\">{isEdit ? 'Edit' : 'New'}</span>")
+        add('                            </nav>')
+        add('                            <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">')
+        add("                                {isEdit ? 'Edit' : 'New'} " + title)
+        add('                            </h1>')
+        add('                        </div>')
+        add(f'                        <Link href="{url}" className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition">')
+        add('                            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>')
+        add('                            Back')
+        add('                        </Link>')
+        add('                    </div>')
+        add('                </div>')
+        add('            </div>')
+        add('')
+        add('            <form onSubmit={submit} className="max-w-5xl mx-auto px-6 py-6 space-y-6">')
+
+        # Scalar fields card
+        scalar_fields = []
+        o2m_fields = []
         for field_name in model['form']:
             field = model['fields'].get(field_name)
             if not field:
                 continue
-
             if is_o2m(field):
-                child = self.model_map[relation_model(field)]
-                func_name = 'add' + pascal_case(field_name)
-
-                lines += [
-                    '',
-                    '                <div className="border rounded p-4">',
-                    '                    <div className="flex justify-between mb-3">',
-                    f'                        <h2 className="font-semibold">{label(field_name)}</h2>',
-                    f'                        {{!readonly && <button type="button" onClick={{{func_name}}} className="border px-3 py-1 rounded">Add Line</button>}}',
-                    '                    </div>',
-                    f'                    {{(data.{field_name} || []).map((line, index) => (',
-                    '                        <div key={index} className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">',
-                ]
-
-                for child_name in child['form']:
-                    child_field = child['fields'].get(child_name)
-                    if not child_field:
-                        continue
-
-                    if is_m2o(child_field):
-                        lines += [
-                            f'                            <select value={{line.{child_name} ?? \'\'}} disabled={{readonly}} onChange={{(e) => {{ const copy = [...data.{field_name}]; copy[index] = {{ ...copy[index], {child_name}: e.target.value }}; setData(\'{field_name}\', copy); }}}} className="border rounded px-2 py-1">',
-                            f'                                <option value="">{label(child_name)}</option>',
-                            f'                                {{(relations[\'{child_name}\'] || []).map((item) => (',
-                            '                                    <option key={item.id} value={item.id}>{item.name}</option>',
-                            '                                ))}',
-                            '                            </select>',
-                        ]
-                    elif is_computed(child_field):
-                        lines.append(f'                            <input value={{line.{child_name} ?? \'\'}} readOnly className="border rounded px-2 py-1 bg-gray-100" placeholder="{label(child_name)}" />')
-                    else:
-                        child_type = field_type(child_field)
-                        input_type = 'number' if child_type in ('float', 'integer') else ('date' if child_type == 'date' else 'text')
-                        lines.append(f'                            <input type="{input_type}" value={{line.{child_name} ?? \'\'}} disabled={{readonly}} onChange={{(e) => {{ const copy = [...data.{field_name}]; copy[index] = {{ ...copy[index], {child_name}: e.target.value }}; setData(\'{field_name}\', copy); }}}} className="border rounded px-2 py-1" placeholder="{label(child_name)}" />')
-
-                lines += [
-                    '                        </div>',
-                    '                    ))}',
-                    '                </div>',
-                ]
-                continue
-
-            lines += [
-                '',
-                '                <div>',
-                f'                    <label className="block mb-1 font-medium">{label(field_name)}</label>',
-            ]
-
-            if is_m2o(field):
-                lines += [
-                    f'                    <select value={{data.{field_name}}} disabled={{readonly}} onChange={{(e) => setData(\'{field_name}\', e.target.value)}} className="border rounded px-3 py-2 w-full">',
-                    '                        <option value="">Select...</option>',
-                    f'                        {{(relations[\'{field_name}\'] || []).map((item) => (',
-                    '                            <option key={item.id} value={item.id}>{item.name}</option>',
-                    '                        ))}',
-                    '                    </select>',
-                ]
-            elif is_selection(field):
-                lines.append(f'                    <select value={{data.{field_name}}} disabled={{readonly}} onChange={{(e) => setData(\'{field_name}\', e.target.value)}} className="border rounded px-3 py-2 w-full">')
-                lines.append('                        <option value="">Select...</option>')
-                for val in selection_values(field):
-                    lines.append(f'                        <option value="{val}">{label(val)}</option>')
-                lines.append('                    </select>')
-            elif field_type(field) == 'bool':
-                lines.append(f'                    <input type="checkbox" checked={{!!data.{field_name}}} disabled={{readonly}} onChange={{(e) => setData(\'{field_name}\', e.target.checked)}} />')
-            elif field_type(field) == 'text':
-                lines.append(f'                    <textarea value={{data.{field_name}}} readOnly={{readonly}} onChange={{(e) => setData(\'{field_name}\', e.target.value)}} className="border rounded px-3 py-2 w-full" rows="4" />')
-            elif is_computed(field):
-                lines.append(f'                    <input value={{data.{field_name}}} readOnly className="border rounded px-3 py-2 w-full bg-gray-100" />')
+                o2m_fields.append(field)
             else:
-                value_type = field_type(field)
-                input_type = 'number' if value_type in ('float', 'integer') else ('date' if value_type == 'date' else ('datetime-local' if value_type == 'datetime' else 'text'))
-                required = 'true' if field['required'] else 'false'
-                lines.append(f'                    <input type="{input_type}" value={{data.{field_name}}} readOnly={{readonly}} required={{{required}}} onChange={{(e) => setData(\'{field_name}\', e.target.value)}} className="border rounded px-3 py-2 w-full" />')
+                scalar_fields.append(field)
 
-            lines.append('                </div>')
+        if scalar_fields:
+            add('                {/* Details Section */}')
+            add('                <div className="bg-white rounded-lg shadow-sm border border-slate-200">')
+            add('                    <div className="px-6 py-4 border-b border-slate-200 flex items-center gap-3">')
+            add('                        <div className="w-8 h-8 rounded-md bg-blue-50 flex items-center justify-center">')
+            add('                            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>')
+            add('                        </div>')
+            add('                        <div>')
+            add('                            <h2 className="text-sm font-semibold text-slate-800">Details</h2>')
+            add('                            <p className="text-xs text-slate-500">Basic information about this record</p>')
+            add('                        </div>')
+            add('                    </div>')
+            add('                    <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-x-5 gap-y-5">')
 
-        lines += [
-            '',
-            '                {!readonly && (',
-            '                    <button type="submit" disabled={processing} className="px-5 py-2 bg-blue-600 text-white rounded">',
-            "                        {isEdit ? 'Update' : 'Save'}",
-            '                    </button>',
-            '                )}',
-            '            </form>',
-            '        </div>',
-            '    );',
-            '}',
-            '',
-        ]
+            input_cls = (
+                "w-full text-sm text-slate-800 bg-white border border-slate-300 rounded-md "
+                "px-3 py-2 placeholder:text-slate-400 transition "
+                "focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 "
+                "disabled:bg-slate-50 disabled:text-slate-500 read-only:bg-slate-50"
+            )
+
+            for field in scalar_fields:
+                field_name = field['name']
+                required_mark = ' <span className="text-rose-500">*</span>' if field['required'] else ''
+                add('')
+                add('                        <div>')
+                add(f'                            <label className="block text-xs font-semibold text-slate-700 mb-1.5">{label(field_name)}{required_mark}</label>')
+
+                if is_m2o(field):
+                    add(f'                            <select value={{data.{field_name}}} disabled={{readonly}} onChange={{(e) => setData(\'{field_name}\', e.target.value)}} className="{input_cls}">')
+                    add('                                <option value="">Select...</option>')
+                    add(f"                                {{(relations['{field_name}'] || []).map((item) => (")
+                    add('                                    <option key={item.id} value={item.id}>{item.name}</option>')
+                    add('                                ))}')
+                    add('                            </select>')
+                elif is_selection(field):
+                    add(f'                            <select value={{data.{field_name}}} disabled={{readonly}} onChange={{(e) => setData(\'{field_name}\', e.target.value)}} className="{input_cls}">')
+                    add('                                <option value="">Select...</option>')
+                    for val in selection_values(field):
+                        add(f'                                <option value="{val}">{label(val)}</option>')
+                    add('                            </select>')
+                elif field_type(field) == 'bool':
+                    add('                            <label className="inline-flex items-center gap-2 cursor-pointer select-none pt-1">')
+                    add(f'                                <input type="checkbox" checked={{!!data.{field_name}}} disabled={{readonly}} onChange={{(e) => setData(\'{field_name}\', e.target.checked)}} className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />')
+                    add('                                <span className="text-sm text-slate-700">Yes</span>')
+                    add('                            </label>')
+                elif field_type(field) == 'text':
+                    add(f'                            <textarea value={{data.{field_name}}} readOnly={{readonly}} onChange={{(e) => setData(\'{field_name}\', e.target.value)}} rows="4" className="{input_cls}" />')
+                elif is_computed(field):
+                    add(f'                            <input value={{data.{field_name}}} readOnly className="w-full text-sm font-medium text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-3 py-2" />')
+                else:
+                    value_type = field_type(field)
+                    input_type = 'number' if value_type in ('float', 'integer') else (
+                        'date' if value_type == 'date' else (
+                            'datetime-local' if value_type == 'datetime' else 'text'
+                        )
+                    )
+                    step = 'step="0.01"' if value_type == 'float' else ''
+                    required_attr = 'required' if field['required'] else ''
+                    add(f'                            <input type="{input_type}" {step} {required_attr} value={{data.{field_name}}} readOnly={{readonly}} onChange={{(e) => setData(\'{field_name}\', e.target.value)}} className="{input_cls}" />')
+
+                add(f"                            {{errors.{field_name} && <p className=\"mt-1 text-xs text-rose-600\">{{errors.{field_name}}}</p>}}")
+                add('                        </div>')
+
+            add('                    </div>')
+            add('                </div>')
+
+        # o2m line-item cards
+        for field in o2m_fields:
+            field_name = field['name']
+            child = self.model_map[relation_model(field)]
+            add_fn = 'add' + pascal_case(field_name)
+            remove_fn = 'remove' + pascal_case(field_name)
+            update_fn = 'update' + pascal_case(field_name)
+
+            visible_child_cols = [c for c in child['form'] if child['fields'].get(c)]
+            col_span = len(visible_child_cols) + 1
+
+            cell_cls = (
+                "w-full text-sm text-slate-800 bg-white border border-slate-300 rounded-md "
+                "px-2.5 py-1.5 placeholder:text-slate-400 transition "
+                "focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 "
+                "disabled:bg-slate-50 disabled:text-slate-500"
+            )
+
+            add('')
+            add('                {/* Line Items */}')
+            add('                <div className="bg-white rounded-lg shadow-sm border border-slate-200">')
+            add('                    <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-3">')
+            add('                        <div className="flex items-center gap-3">')
+            add('                            <div className="w-8 h-8 rounded-md bg-indigo-50 flex items-center justify-center">')
+            add('                                <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16" /></svg>')
+            add('                            </div>')
+            add('                            <div>')
+            add(f'                                <h2 className="text-sm font-semibold text-slate-800">{label(field_name)}</h2>')
+            add('                                <p className="text-xs text-slate-500">Add one or more line items</p>')
+            add('                            </div>')
+            add('                        </div>')
+            add(f'                        {{!readonly && (')
+            add(f'                            <button type="button" onClick={{{add_fn}}} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md transition">')
+            add('                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>')
+            add('                                Add Line')
+            add('                            </button>')
+            add('                        )}')
+            add('                    </div>')
+            add('                    <div className="overflow-x-auto">')
+            add('                        <table className="w-full text-sm">')
+            add('                            <thead>')
+            add('                                <tr className="bg-slate-50 border-b border-slate-200">')
+            for child_name in visible_child_cols:
+                add(f'                                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">{label(child_name)}</th>')
+            add('                                    <th className="w-14 px-3 py-2.5"></th>')
+            add('                                </tr>')
+            add('                            </thead>')
+            add('                            <tbody className="divide-y divide-slate-100">')
+            add(f'                                {{(data.{field_name} || []).length === 0 ? (')
+            add('                                    <tr>')
+            add(f'                                        <td colSpan={{{col_span}}} className="px-6 py-10 text-center">')
+            add('                                            <div className="flex flex-col items-center gap-2 text-slate-400">')
+            add('                                                <svg className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>')
+            add('                                                <p className="text-xs">No lines added yet. Click "Add Line" to begin.</p>')
+            add('                                            </div>')
+            add('                                        </td>')
+            add('                                    </tr>')
+            add(f'                                ) : (data.{field_name} || []).map((line, index) => (')
+            add('                                    <tr key={index} className="hover:bg-slate-50/60">')
+
+            for child_name in visible_child_cols:
+                child_field = child['fields'][child_name]
+                add('                                        <td className="px-4 py-2.5 align-top">')
+
+                if is_m2o(child_field):
+                    add(f'                                            <select value={{line.{child_name} ?? \'\'}} disabled={{readonly}} onChange={{(e) => {update_fn}(index, \'{child_name}\', e.target.value)}} className="{cell_cls}">')
+                    add('                                                <option value="">Select...</option>')
+                    add(f"                                                {{(relations['{child_name}'] || []).map((item) => (")
+                    add('                                                    <option key={item.id} value={item.id}>{item.name}</option>')
+                    add('                                                ))}')
+                    add('                                            </select>')
+                elif is_computed(child_field):
+                    add(f'                                            <input value={{line.{child_name} ?? \'\'}} readOnly className="w-full text-sm font-medium text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1.5" />')
+                else:
+                    child_type = field_type(child_field)
+                    input_type = 'number' if child_type in ('float', 'integer') else (
+                        'date' if child_type == 'date' else 'text'
+                    )
+                    step = 'step="0.01"' if child_type == 'float' else ''
+                    add(f'                                            <input type="{input_type}" {step} value={{line.{child_name} ?? \'\'}} disabled={{readonly}} onChange={{(e) => {update_fn}(index, \'{child_name}\', e.target.value)}} className="{cell_cls}" />')
+
+                add('                                        </td>')
+
+            add('                                        <td className="px-3 py-2.5 text-center align-middle">')
+            add('                                            {!readonly && (')
+            add(f'                                                <button type="button" onClick={{() => {remove_fn}(index)}} className="inline-flex items-center justify-center w-8 h-8 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition" title="Remove">')
+            add('                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" /></svg>')
+            add('                                                </button>')
+            add('                                            )}')
+            add('                                        </td>')
+            add('                                    </tr>')
+            add('                                ))}')
+            add('                            </tbody>')
+            add('                        </table>')
+            add('                    </div>')
+            add('                </div>')
+
+        # Footer actions
+        add('')
+        add('                {/* Actions */}')
+        add('                {!readonly && (')
+        add('                    <div className="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-4 flex items-center justify-between flex-wrap gap-3 sticky bottom-4">')
+        add('                        <p className="text-xs text-slate-500">')
+        add('                            Fields marked <span className="text-rose-500">*</span> are required')
+        add('                        </p>')
+        add('                        <div className="flex items-center gap-2">')
+        add(f'                            <Link href="{url}" className="inline-flex items-center px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition">Cancel</Link>')
+        add('                            <button type="submit" disabled={processing} className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60 disabled:cursor-not-allowed transition">')
+        add('                                {processing && (')
+        add('                                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>')
+        add('                                )}')
+        add("                                {isEdit ? 'Update' : 'Save'}")
+        add('                            </button>')
+        add('                        </div>')
+        add('                    </div>')
+        add('                )}')
+        add('            </form>')
+        add('        </div>')
+        add('    );')
+        add('}')
+        add('')
+
         self.write(path, '\n'.join(lines))
 
     # ========================================================
@@ -1217,7 +1493,9 @@ class Generator:
             class_name = pascal_case(model['name'])
             url = model['url'].strip('/')
             route_name = model['name']
-            lines.append(f"Route::resource('{url}', {class_name}Controller::class)->names('{route_name}')->parameters(['{url}' => 'record']);")
+            lines.append(
+                f"Route::resource('{url}', {class_name}Controller::class)->names('{route_name}')->parameters(['{url}' => 'record']);"
+            )
 
         lines.append('')
         self.write(path, '\n'.join(lines))
@@ -1268,12 +1546,13 @@ class Generator:
 
     def print_structure(self):
         print('\n' + '=' * 80 + '\nGENERATED FILES\n' + '=' * 80)
+        module_pages = os.path.join('resources', 'js', 'Pages', pascal_case(self.module)) + os.sep
         for root, dirs, files in os.walk(self.project):
             dirs[:] = [d for d in dirs if d not in ('vendor', 'node_modules', '.git')]
             for filename in files:
                 full_path = os.path.join(root, filename)
                 relative = os.path.relpath(full_path, self.project)
-                if relative.startswith(('app/Modules/', 'routes/')):
+                if relative.startswith(('app/Modules/', 'routes/', module_pages)):
                     print(os.path.abspath(full_path))
 
     def generate(self):
@@ -1292,9 +1571,9 @@ class Generator:
             os.path.join(self.module_dir(), 'Request'),
             os.path.join(self.module_dir(), 'Controller'),
             os.path.join(self.module_dir(), 'Database', 'Migrations'),
-            os.path.join(self.module_dir(), 'Resources', 'js'),
             os.path.join(self.module_dir(), 'Routes'),
             os.path.join(self.project, 'routes'),
+            os.path.join(self.project, 'resources', 'js', 'Pages', pascal_case(self.module)),
         ]
         for d in directories:
             self.mkdir(d)

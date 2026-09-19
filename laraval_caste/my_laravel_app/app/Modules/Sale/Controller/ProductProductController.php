@@ -32,7 +32,10 @@ class ProductProductController extends Controller
 
         $records = $query->latest()->paginate(20)->withQueryString();
 
-        return Inertia::render('Sale/ProductProduct/Index', ['records' => $records]);
+        return Inertia::render('Sale/ProductProduct/Index', [
+            'records' => $records,
+            'filters' => $request->only('search'),
+        ]);
     }
 
     public function create()

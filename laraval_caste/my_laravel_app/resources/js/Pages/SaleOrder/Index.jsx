@@ -43,7 +43,7 @@ export default function Index({ records }) {
                 <td className="px-4 py-2 border-b">{row.email}</td>
                                     <td className="px-4 py-2 text-right space-x-2">
                                         <Link
-                                            href={\`/partners/\${row.id}/edit\`}
+                                            href={`/partners/${row.id}/edit`}
                                             className="text-indigo-600 hover:underline"
                                         >
                                             Edit

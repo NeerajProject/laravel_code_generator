@@ -32,7 +32,10 @@ class ResPartnerController extends Controller
 
         $records = $query->latest()->paginate(20)->withQueryString();
 
-        return Inertia::render('Sale/ResPartner/Index', ['records' => $records]);
+        return Inertia::render('Sale/ResPartner/Index', [
+            'records' => $records,
+            'filters' => $request->only('search'),
+        ]);
     }
 
     public function create()
@@ -52,7 +55,7 @@ class ResPartnerController extends Controller
             $data = $request->except(['_token']);
             $record = $this->service->create($data);
 
-
+            return redirect()->route('res.partner.index')->with('success', 'Created successfully.');
         });
     }
 
